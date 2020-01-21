@@ -1,0 +1,170 @@
+{
+    "source00": {
+        "position": [
+            0.8473976817803452,
+            0.22394938212696647,
+            0
+        ],
+        "filename": "./outputs/00000/gt_voice_00.wav"
+    },
+    "background00": {
+        "position": [
+            -1.7236630346679664,
+            -0.22079799132163672,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0745.wav"
+    },
+    "background01": {
+        "position": [
+            1.774810887993205,
+            -1.7197180058139292,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0608.wav"
+    },
+    "background02": {
+        "position": [
+            -0.7132639335588076,
+            -0.21594635967468018,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0278.wav"
+    },
+    "background03": {
+        "position": [
+            2.0175987740699544,
+            4.084891802053163,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0547.wav"
+    },
+    "background04": {
+        "position": [
+            1.738292262694485,
+            0.93106000268406,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0182.wav"
+    },
+    "background05": {
+        "position": [
+            2.2394399343185554,
+            4.150652769820396,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0183.wav"
+    },
+    "background06": {
+        "position": [
+            -1.4237049433987232,
+            -2.4486830237653416,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0845.wav"
+    },
+    "background07": {
+        "position": [
+            -0.41092370847093207,
+            2.6326912298705207,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0997.wav"
+    },
+    "background08": {
+        "position": [
+            3.0111537998805136,
+            -1.9256913022758984,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0003.wav"
+    },
+    "background09": {
+        "position": [
+            -0.6117369324244971,
+            4.529679333469405,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0876.wav"
+    },
+    "background10": {
+        "position": [
+            -4.5395962642055645,
+            0.9715454681334695,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0349.wav"
+    },
+    "background11": {
+        "position": [
+            -3.5588821342548878,
+            0.766248171321595,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0687.wav"
+    },
+    "background12": {
+        "position": [
+            -2.92710116324217,
+            -2.7916550094467096,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0524.wav"
+    },
+    "background13": {
+        "position": [
+            0.6048638881155624,
+            -0.48325519628589114,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0900.wav"
+    },
+    "background14": {
+        "position": [
+            3.9952656969788416,
+            2.827888046030297,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0990.wav"
+    },
+    "background15": {
+        "position": [
+            2.049308823100939,
+            1.0661855286409214,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0438.wav"
+    },
+    "background16": {
+        "position": [
+            -2.8141350457671557,
+            0.3116666577904734,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0761.wav"
+    },
+    "background17": {
+        "position": [
+            0.35214285961924907,
+            -4.021524902839054,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0354.wav"
+    },
+    "background18": {
+        "position": [
+            -1.9403495307059717,
+            -1.2632131612623803,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0598.wav"
+    },
+    "background19": {
+        "position": [
+            0.1318160653623205,
+            -1.8393512182601395,
+            0
+        ],
+        "filename": "outputAmbients/ZSrVznkaMEM_50000_1500000_0836.wav"
+    }
+}

@@ -1,3 +1,9 @@
+# Projects
+envs/
+checkpoints/
+d3audiorecon/
+data/
+
 # Mac OS cache
 .DS_Store
 
