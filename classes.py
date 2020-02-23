@@ -1,4 +1,3 @@
-import os
 from typing import List
 
 import numpy as np
@@ -8,10 +7,13 @@ import soundfile as sf
 from constants import \
     SPEED_OF_SOUND, ATTENUATION_ALPHA
 
-INPUT_OUTPUT_TARGET_SAMPLE_RATE = 48000
+INPUT_OUTPUT_TARGET_SAMPLE_RATE: int = 48000
 
 
 class Microphone(object):
+    """
+    Microphone class
+    """
     def __init__(self, position: List[float]):
         """
         Args:
@@ -41,6 +43,9 @@ class Microphone(object):
 
 
 class SoundSource(object):
+    """
+    SoundSource class
+    """
     def __init__(self,
                  position: List[float],
                  filename=None,
@@ -54,7 +59,7 @@ class SoundSource(object):
         """
         Either filename should be passed, or data and sample rate
         """
-        assert (len(position) == 3)  # x, y, z
+        assert len(position) == 3  # x, y, z
         self.position = np.array(position)
 
         if filename is None:
@@ -66,7 +71,7 @@ class SoundSource(object):
             self.sample_rate = sr
             self.start_time = start_time
 
-        elif type(filename) is str:
+        elif isinstance(filename, str):
             audio, sample_rate = librosa.core.load(
                 filename,
                 sr=INPUT_OUTPUT_TARGET_SAMPLE_RATE,
@@ -103,16 +108,10 @@ class SoundSource(object):
     def save(self, filename: str):
         sf.write(filename, self.audio, self.sample_rate)
 
-class Ambient(object):
-    def __init__(self, data = None, sr = None, start_time: float = 0.0, duration = None):
-        self.audio = data
-        self.sample_rate = sr
-        self.start_time = start_time
-
-    def save(self, filename: str):
-        sf.write(filename, self.audio, self.sample_rate)
-
 class Scene(object):
+    """
+    Scene class
+    """
     def __init__(self, sources: List[SoundSource], mics: List[Microphone]):
         self.sources = sources
         self.mics = mics
@@ -149,11 +148,11 @@ class Scene(object):
                     (curr_start_samples)).astype(np.float64), source.audio))
 
                 # Attenuation
-                if (geometric_attenuation):
+                if geometric_attenuation:
                     curr_buffer = np.divide(
                         curr_buffer, distance**
                         2)  # attenuation due to energy spreading over area
-                if (atmospheric_attenuation):
+                if atmospheric_attenuation:
                     curr_buffer = np.multiply(
                         curr_buffer, np.exp(-ATTENUATION_ALPHA * distance)
                     )  # attenuation due to atmosphere https://en.wikibooks.org/wiki/Engineering_Acoustics/Outdoor_Sound_Propagation

@@ -1,29 +1,14 @@
+from typing import Tuple, Optional
 from pathlib import Path
-import os
 import json
 import torch
-import cv2
-import librosa
 import numpy as np
 from scipy.io import wavfile
+import librosa
 
-GLOBAL_SAMPLE_RATE = 22050
-NUM_BGS = 20
-DIM_DIVISOR = 32  # To go through UNet, must divide this dim
-USE_CUDA = True
-BATCH_SIZE = 128
-TEST_BATCH_SIZE = 128
+GLOBAL_SAMPLE_RATE: int = 22050
 
-def save_mask(masks, directory):
-    import matplotlib # pylint: disable=import-outside-toplevel
-    matplotlib.use("Agg")
-
-    for mask_idx in range(masks.shape[0]):
-        mask = masks[mask_idx, :, :]
-        cv2.imwrite(os.path.join(directory, "mask{:02d}.png".format(mask_idx)),
-        (mask*255).astype(np.uint8))
-
-def read_file(filename, sample_rate=None, trim=False):
+def read_file(filename, sample_rate: Optional[int] = None, trim: bool = False) -> Tuple[np.ndarray, int]:
     """
     Reads in a wav file and returns it as an np.float32 array in the range [-1,1]
     """
@@ -40,26 +25,6 @@ def read_file(filename, sample_rate=None, trim=False):
         signal = librosa.effects.trim(signal, top_db=40)[0]
     return signal, file_sr
 
-def log_cqt(fname, sample_rate=None):
-    """
-    Generates a constant Q transform in dB magnitude
-    """
-    y, sample_rate = read_file(fname, sample_rate=sample_rate)
-    fmin = None
-    hop_length = 256
-    n_bins = 256
-    bins_per_octave = 32
-    filter_scale = 0.1
-
-    C = np.abs(librosa.cqt(y, sr=sample_rate,
-                           hop_length=hop_length,
-                           fmin=fmin,
-                           n_bins=n_bins,
-                           filter_scale=filter_scale,
-                           bins_per_octave=bins_per_octave))
-    C_db = librosa.power_to_db(C)
-    return C_db
-
 class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
     """
     Dataset of mixed waveforms and their corresponding ground truth waveforms
@@ -70,15 +35,17 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
     as (n_microphone, duration).
     """
 
-    def __init__(self, input_path, sr=GLOBAL_SAMPLE_RATE):
+    def __init__(self, input_path, n_sources=1, n_backgrounds=1, sr=GLOBAL_SAMPLE_RATE):
         super().__init__()
         self.dirs = list(Path(input_path).glob('[0-9]*'))
+        self.n_sources = n_sources
+        self.n_backgrounds = n_backgrounds
         self.sr = sr
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.dirs)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         curr_dir = self.dirs[idx]
 
         mic_files = sorted(list(Path(curr_dir).rglob('*mixed.wav')))
@@ -89,87 +56,44 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
             mixed_waveforms.append(torch.from_numpy(mixed_waveform))
         mixed_data = torch.tensor(np.stack(mixed_waveforms)).float()
 
-        # GT signals
-        gt_audio_files = sorted(list(Path(curr_dir).rglob('*source00*.wav')))
-        gt_waveforms = []
-        for _, gt_audio_file in enumerate(gt_audio_files):
-            gt_waveform, _ = librosa.core.load(gt_audio_file, self.sr, mono=True)
-            gt_waveforms.append(torch.from_numpy(gt_waveform))
-        gt_data = torch.tensor(np.stack(gt_waveforms)).float()
-
-        gt_data = gt_data.unsqueeze(0) # Special case when only have one source separation
+        # GT voice signals
+        gt_voice_data = []
+        for source in range(self.n_sources):
+            gt_audio_files = sorted(list(Path(curr_dir).rglob('*source{:02d}*.wav'.format(source))))
+            gt_waveforms = []
+            for _, gt_audio_file in enumerate(gt_audio_files):
+                gt_waveform, _ = librosa.core.load(gt_audio_file, self.sr, mono=True)
+                gt_waveforms.append(torch.from_numpy(gt_waveform))
+            gt_voice_data.append(torch.tensor(np.stack(gt_waveforms)).float())
+        gt_voice_data = torch.stack(gt_voice_data, dim=0)
+        
+        # GT background signals
+        gt_bg_data = []
+        for source in range(self.n_sources, self.n_sources + self.n_backgrounds):
+            gt_audio_files = sorted(list(Path(curr_dir).rglob('*source{:02d}*.wav'.format(source))))
+            gt_waveforms = []
+            for _, gt_audio_file in enumerate(gt_audio_files):
+                gt_waveform, _ = librosa.core.load(gt_audio_file, self.sr, mono=True)
+                gt_waveforms.append(torch.from_numpy(gt_waveform))
+            gt_bg_data.append(torch.tensor(np.stack(gt_waveforms)).float())
+        gt_bg_data = torch.stack(gt_bg_data, dim=0)
 
         # Get metadata
         with open(Path(curr_dir) / 'metadata.json') as json_file:
             json_data = json.load(json_file)
-            locs = json_data['source00']['position']
-        locs = torch.tensor(locs)
+            locs_voices = json_data['voice']['position']
+            locs_bg = json_data['bg']['position']
+        locs_voices = torch.tensor(locs_voices)
+        locs_bg = torch.tensor(locs_bg)
 
-        return (mixed_data, gt_data, locs)
-
-# class SpatialAudioDatasetSpectrogram(torch.utils.data.Dataset):
-#     def __init__(self, input_path):
-#         super().__init__()
-#         self.dirs = list(Path(input_path).glob('[0-9]*'))
-
-#     def __len__(self):
-#         return len(self.dirs)
-
-#     def __getitem__(self, idx):
-#         curr_dir = self.dirs[idx]
-
-#         # Get mic recordings
-#         mic_files = sorted(list(Path(curr_dir).rglob('*mixed.wav')))
-
-#         # Mixed signals
-#         mixed_specgrams = []
-#         for _, mic_file in enumerate(mic_files):
-#             specgram = log_cqt(str(mic_file), sample_rate=self.sr)
-#             mixed_specgrams.append(torch.from_numpy(specgram))
-
-#         mixed_data = np.stack(mixed_specgrams)
-
-#         # Ground truth signals
-#         gt_audio_files = sorted(list(Path(curr_dir).rglob('*source00*.wav')))
-#         gt_specgrams = []
-#         for _, gt_audio_file in enumerate(gt_audio_files):
-#             specgram = log_cqt(str(gt_audio_file), sample_rate=self.sr)
-#             gt_specgrams.append(torch.from_numpy(specgram))
-
-#         gt_data = torch.stack(gt_specgrams)
-
-#         # Background masks
-#         bg_max = np.ones_like(gt_data.numpy()) * np.NINF
-#         for bg_source_idx in range(1, NUM_BGS + 1):
-#             gt_bg_files = sorted(list(Path(curr_dir) \
-#                 .rglob('*sourc{:02d}*.wav'.format(bg_source_idx))))
-#             curr_bg_stack = np.zeros_like(bg_max)
-#             for bg_mic_idx, gt_bg_file in enumerate(gt_bg_files):
-#                 curr_bg_stack[bg_mic_idx, :, :] = log_cqt(gt_bg_file, sample_rate=self.sr)
-#             bg_max = np.maximum(bg_max, curr_bg_stack)
-#         mask = gt_data.numpy() > bg_max
-
-#         # Padding for u-net
-#         time_dim = mask.shape[2]
-#         time_dim_padded = np.ceil(time_dim / DIM_DIVISOR) * DIM_DIVISOR
-
-#         input_padded = np.zeros((mixed_data.shape[0], mixed_data.shape[1], time_dim_padded))
-#         input_padded[:mixed_data.shape[0], :mixed_data.shape[1], :mixed_data.shape[2]] = mixed_data
-
-#         mask_padded = np.zeros((mask.shape[0], mask.shape[1], time_dim_padded))
-#         mask_padded[:mask.shape[0], :mask.shape[1], :mask.shape[2]] = mask
-#         save_mask(mask_padded, "./data/")
-
-#         return (torch.tensor(input_padded).float(),
-#                 torch.tensor(mask_padded).float())
-
+        return (mixed_data, gt_voice_data, gt_bg_data, locs_voices, locs_bg)
 
 if __name__ == '__main__':
-    data_train = SpatialAudioDatasetWaveform('./data/')
+    data_train = SpatialAudioDatasetWaveform('/projects/grail/audiovisual/datasets/DinTaiFung/mics_8_radius_3_voice_1_bg_1/train')
     train_loader = torch.utils.data.DataLoader(data_train,
                                                batch_size=4)
 
     x = None
-    for (data, label) in train_loader:
-        x = (data, label)
+    for x in train_loader:
+        print(x)
         break

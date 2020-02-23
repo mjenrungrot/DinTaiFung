@@ -1,117 +1,13 @@
 import math
+from typing import Tuple, Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# from collections import OrderedDict
-# def unet(pretrained=False, **kwargs):
-#     model = UNet(**kwargs)
-#     if pretrained:
-#         checkpoint = "https://github.com/mateuszbuda/brain-segmentation-pytorch/releases/download/v1.0/unet-e012d006.pt"
-#         state_dict = torch.hub.load_state_dict_from_url(checkpoint, progress=False, map_location='cpu')
-#         model.load_state_dict(state_dict, strict=False)
-#     return model
-
-# class UNet(nn.Module):
-#     def __init__(self, in_channels=2, out_channels=2, init_features=32):
-#         super(UNet, self).__init__()
-
-#         features = init_features
-#         self.encoder1 = UNet._block(in_channels, features, name="enc1_mod")
-#         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-#         self.encoder2 = UNet._block(features, features * 2, name="enc2")
-#         self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-#         self.encoder3 = UNet._block(features * 2, features * 4, name="enc3")
-#         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
-#         self.encoder4 = UNet._block(features * 4, features * 8, name="enc4")
-#         self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-#         self.bottleneck = UNet._block(features * 8, features * 16, name="bottleneck")
-
-#         self.upconv4 = nn.ConvTranspose2d(features * 16, features * 8, kernel_size=2, stride=2)
-#         self.decoder4 = UNet._block((features * 8) * 2, features * 8, name="dec4")
-#         self.upconv3 = nn.ConvTranspose2d(features * 8, features * 4, kernel_size=2, stride=2)
-#         self.decoder3 = UNet._block((features * 4) * 2, features * 4, name="dec3")
-#         self.upconv2 = nn.ConvTranspose2d(features * 4, features * 2, kernel_size=2, stride=2)
-#         self.decoder2 = UNet._block((features * 2) * 2, features * 2, name="dec2")
-#         self.upconv1 = nn.ConvTranspose2d(features * 2, features, kernel_size=2, stride=2)
-#         self.decoder1 = UNet._block(features * 2, features, name="dec1")
-
-#         self.conv_mod = nn.Conv2d(in_channels=features, out_channels=out_channels, kernel_size=1)
-
-#     def forward(self, x): # pylint: disable=arguments-differ
-#         enc1 = self.encoder1(x)
-#         enc2 = self.encoder2(self.pool1(enc1))
-#         enc3 = self.encoder3(self.pool2(enc2))
-#         enc4 = self.encoder4(self.pool3(enc3))
-
-#         bottleneck = self.bottleneck(self.pool4(enc4))
-
-#         dec4 = self.upconv4(bottleneck)
-#         dec4 = torch.cat((dec4, enc4), dim=1)
-#         dec4 = self.decoder4(dec4)
-#         dec3 = self.upconv3(dec4)
-#         dec3 = torch.cat((dec3, enc3), dim=1)
-#         dec3 = self.decoder3(dec3)
-#         dec2 = self.upconv2(dec3)
-#         dec2 = torch.cat((dec2, enc2), dim=1)
-#         dec2 = self.decoder2(dec2)
-#         dec1 = self.upconv1(dec2)
-#         dec1 = torch.cat((dec1, enc1), dim=1)
-#         dec1 = self.decoder1(dec1)
-
-#         return torch.sigmoid(self.conv_mod(dec1))
-
-#     def loss(self, prediction, label, reduction="elementwise_mean"):
-#         loss_val = F.binary_cross_entropy(prediction, label, reduction=reduction)
-#         return loss_val
-
-#     @staticmethod
-#     def _block(in_channels, features, name):
-#         return nn.Sequential(OrderedDict(
-#             [
-#                 (
-#                     name + "conv1",
-#                     nn.Conv2d(
-#                         in_channels=in_channels,
-#                         out_channels=features,
-#                         kernel_size=3,
-#                         padding=1,
-#                         bias=False,
-#                     ),
-#                 ),
-#                 (name + "norm1", nn.BatchNorm2d(num_features=features)),
-#                 (name + "relu1", nn.ReLU(inplace=True)),
-#                 (
-#                     name + "conv2",
-#                     nn.Conv2d(
-#                         in_channels=features,
-#                         out_channels=features,
-#                         kernel_size=3,
-#                         padding=1,
-#                         bias=False,
-#                     ),
-#                 ),
-#                 (name + "norm2", nn.BatchNorm2d(num_features=features)),
-#                 (name + "relu2", nn.ReLU(inplace=True)),
-#             ]
-#         )
-#                              )
-
-class BLSTM(nn.Module):
-    def __init__(self, dim, layers=1):
-        super().__init__()
-        self.lstm = nn.LSTM(bidirectional=True, num_layers=layers, hidden_size=dim, input_size=dim)
-        self.linear = nn.Linear(2*dim, dim)
-
-    def forward(self, x):
-        x = x.permute(2, 0, 1)
-        x = self.lstm(x)[0]
-        x = self.linear(x)
-        x = x.permute(1, 2, 0)
-        return x
-
 def rescale_conv(conv, reference):
+    """
+    Rescale a convolutional module with `reference`.
+    """
     std = conv.weight.std().detach()
     scale = (std / reference) ** 0.5
     conv.weight.data /= scale
@@ -119,11 +15,17 @@ def rescale_conv(conv, reference):
         conv.bias.data /= scale
 
 def rescale_module(module, reference):
+    """
+    Rescale a module with `reference`.
+    """
     for sub in module.modules():
         if isinstance(sub, (nn.Conv1d, nn.ConvTranspose1d)):
             rescale_conv(sub, reference)
 
 def center_trim(tensor, reference):
+    """
+    Trim a tensor to match with the dimension of `reference`.
+    """
     if hasattr(reference, "size"):
         reference = reference.size(-1)
     diff = tensor.size(-1) - reference
@@ -134,6 +36,9 @@ def center_trim(tensor, reference):
     return tensor
 
 def upsample(x, stride):
+    """
+    Bi-linearly upsample a tensor with a given stride.
+    """
     batch, channels, time = x.size()
     weight = torch.arange(stride, device=x.device, dtype=torch.float) / stride
     x = x.view(batch, channels, time, 1)
@@ -141,20 +46,27 @@ def upsample(x, stride):
     return out.reshape(batch, channels, -1)
 
 def downsample(x, stride):
+    """
+    Downsample a tensor with a given stride.
+    """
     return x[:, :, ::stride]
 
 class Demucs(nn.Module):
-    def __init__(self, sources=2, 
-                 n_audio_channels=2,
-                 kernel_size=8,
-                 stride=4,
-                 context=3,
-                 depth=6,
-                 channels=64,
-                 growth=2.0,
-                 lstm_layers=2,
-                 rescale=0.1,
-                 upsample=False): # pylint: disable=redefined-outer-name
+    """
+    Demucs network for audio source separation.
+    """
+    def __init__(self,
+                 sources: int = 2,
+                 n_audio_channels: int = 2, # pylint: disable=redefined-outer-name
+                 kernel_size: int = 8,
+                 stride: int = 4,
+                 context: int = 3,
+                 depth: int = 6,
+                 channels: int = 64,
+                 growth: float = 2.0,
+                 lstm_layers: int = 2,
+                 rescale: float = 0.1,
+                 upsample: bool = False): # pylint: disable=redefined-outer-name
         super().__init__()
         self.sources = sources
         self.n_audio_channels = n_audio_channels
@@ -168,9 +80,9 @@ class Demucs(nn.Module):
         self.rescale = rescale
         self.upsample = upsample
 
-        self.encoder = nn.ModuleList()
-        self.decoder = nn.ModuleList()
-        self.loc_decoder = nn.ModuleList()
+        self.encoder = nn.ModuleList() # Source encoder
+        self.decoder = nn.ModuleList() # Audio output decoder
+        self.loc_decoder = nn.ModuleList() # Location decoder
 
         self.final = None
 
@@ -179,25 +91,29 @@ class Demucs(nn.Module):
             stride = 1
 
         activation = nn.GLU(dim=1)
-        ch_scale = 2
 
-        in_channels = n_audio_channels
+        in_channels = n_audio_channels          # Number of input channels
+        in_loc_channels = 3                     # Number of input location channels
+
+        # Wave U-Net structure
         for index in range(depth):
             encode = []
             encode += [nn.Conv1d(in_channels, channels, kernel_size, stride), nn.ReLU()]
-            encode += [nn.Conv1d(channels, ch_scale * channels, 1), activation]
+            encode += [nn.Conv1d(channels, 2 * channels, 1), activation]
             self.encoder.append(nn.Sequential(*encode))
 
             decode = []
             if index > 0:
                 out_channels = in_channels
+                out_loc_channels = 3
             else:
                 if upsample:
                     out_channels = channels
                 else:
                     out_channels = sources * n_audio_channels
+                    out_loc_channels = sources * 3
 
-            decode += [nn.Conv1d(channels, ch_scale * channels, context), activation]
+            decode += [nn.Conv1d(channels, 2 * channels, context), activation]
 
             if upsample:
                 decode += [nn.Conv1d(channels, out_channels, kernel_size, stride=1)]
@@ -209,7 +125,7 @@ class Demucs(nn.Module):
             self.decoder.insert(0, nn.Sequential(*decode))
 
             loc_decoder = []
-            loc_decoder += [nn.ConvTranspose1d(3, 3, kernel_size, stride)]
+            loc_decoder += [nn.ConvTranspose1d(in_loc_channels, out_loc_channels, kernel_size, stride)]
             if index > 0:
                 loc_decoder.append(nn.ReLU())
             self.loc_decoder.insert(0, nn.Sequential(*loc_decoder))
@@ -217,6 +133,7 @@ class Demucs(nn.Module):
             in_channels = channels
             channels = int(growth * channels)
 
+        # Bi-directional LSTM for the bottleneck layer
         channels = in_channels
         self.lstm = nn.LSTM(bidirectional=True, num_layers=lstm_layers, hidden_size=channels, input_size=channels)
         self.lstm_linear = nn.Linear(2*channels, channels)
@@ -224,31 +141,39 @@ class Demucs(nn.Module):
 
         rescale_module(self, reference=rescale)
 
+    def forward(self, mix: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]: # pylint: disable=arguments-differ
+        """
+        Forward pass. Note that in our current work the use of `locs` is disregarded.
 
-    def forward(self, mix):
+        Args:
+            mix (torch.Tensor) - An input recording of size `(batch_size, n_mics, time)`.
+
+        Output:
+            x, locs (Tuple[torch.Tensor, torch.Tensor]) where
+            `x` is a source separated output at every microphone and `locs` is the corresponding
+            location. `x` has dimension of `(batch_size, n_sources, n_mics, time)`, and `locs` has
+            dimension of `(batch_size, n_sources, 3, time)`.
+        """
         x = mix
         saved = [x]
-        # print(x.shape)
+
+        # Encoder
         for encode in self.encoder:
             x = encode(x)
-            print(x.shape)
             saved.append(x)
             if self.upsample:
                 x = downsample(x, self.stride)
-        # print("Before LSTM", x.shape)
 
+        # Bi-directional LSTM at the bottleneck layer
         x = x.permute(2, 0, 1) # prep input for LSTM
+        self.lstm.flatten_parameters() # to improve memory usage.
         x = self.lstm(x)[0]
-        locs = self.loc_prediction(x)
+        locs = self.loc_prediction(x) # pylint: disable=redefined-outer-name
         locs = locs.permute(1, 2, 0)
-
         x = self.lstm_linear(x)
         x = x.permute(1, 2, 0)
 
-        # print("After LSTM", x.shape)
-        # print(locs.shape)
-        # print(x.shape)
-
+        # Source decoder
         for decode in self.decoder:
             if self.upsample:
                 x = upsample(x, stride=self.stride)
@@ -256,6 +181,7 @@ class Demucs(nn.Module):
             x = x + skip
             x = decode(x)
 
+        # Location decoder
         for loc_decode in self.loc_decoder:
             locs = loc_decode(locs)
 
@@ -264,15 +190,67 @@ class Demucs(nn.Module):
             x = torch.cat([x, skip], dim=1)
             x = self.final(x)
 
+        # Reformat the output
         x = x.view(x.size(0), self.sources, self.n_audio_channels, x.size(-1))
         locs = locs.view(locs.size(0), self.sources, 3, locs.size(-1))
         return x, locs
 
-    def loss(self, prediction, label):
-        loss_val = F.l1_loss(prediction, label)
-        return loss_val
+    def loss(self,
+             input_signal: torch.Tensor,
+             voice_signals: torch.Tensor,
+             label_voice_signals: torch.Tensor,
+             bg_signals: torch.Tensor,
+             label_bg_signals: torch.Tensor,
+             voice_locs: torch.Tensor, # pylint: disable=unused-argument
+             label_voice_locs: torch.Tensor, # pylint: disable=unused-argument
+             bg_locs: torch.Tensor, # pylint: disable=unused-argument
+             label_bg_locs: torch.Tensor) -> Tuple[torch.Tensor, Any]:      # pylint: disable=unused-argument
+        """
+        Compute the loss function.
 
-    def valid_length(self, length): # pylint: disable=redefined-outer-name
+        Args:
+            input_signal (torch.Tensor) - an input signal of size `(batch_size, n_mics, time)`.
+            voice_signals (torch.Tensor) - an output voice of size `(batch_size, n_sources, n_mics, time)`.
+            label_voice_signals (torch.Tensor) a ground truth voice of size the same as `voice_signals`.
+            bg_signals (torch.Tensor) - an output background of size `(batch_size, n_sources, n_mics, time)`.
+            label_bg_signals (torch.Tensor) - a ground truth background of size the same as `bg_signals`.
+            voice_locs (torch.Tensor) - an output location for voice of size `(batch_size, n_sources, 3, time)`.
+            label_voice_locs (torch.Tensor) - a ground truth location for voice of size the same as `voice_locs`.
+            bg_locs (torch.Tensor) - an output location for background of size `(batch_size, n_sources, 3, time)`.
+            label_bg_locs (torch.Tensor) - a ground truth location for background of size the same as `bg_locs`.
+
+        Output:
+            loss_val (torch.Tensor) - loss tensor.
+            info (Dict[str, torch.Tensor]) - information regarding each individual loss.
+        """
+        loss_val = 0
+
+        reconstruction_voices_loss = 0
+        reconstruction_bg_loss = 0
+        reconstruction_combined_loss = 0
+
+        reconstruction_voices_loss += F.l1_loss(voice_signals, label_voice_signals)
+        reconstruction_bg_loss += F.l1_loss(bg_signals, label_bg_signals)
+
+        combined_signal = torch.zeros_like(input_signal)
+        combined_signal += torch.sum(voice_signals, dim=1)
+        combined_signal += torch.sum(bg_signals, dim=1)
+        reconstruction_combined_loss += F.l1_loss(input_signal, combined_signal)
+
+        info = {
+            'reconstruction_voices_loss': reconstruction_voices_loss,
+            'reconstruction_bg_loss': reconstruction_bg_loss,
+            'reconstruction_combined_loss': reconstruction_combined_loss,
+        }
+        loss_val = reconstruction_voices_loss + \
+            reconstruction_bg_loss
+        return loss_val, info
+
+    def valid_length(self, length: int) -> int: # pylint: disable=redefined-outer-name
+        """
+        Find the length of the input to the network such that the output's length is
+        equal to the given `length`.
+        """
         for _ in range(self.depth):
             if self.upsample:
                 length = math.ceil(length / self.stride) + self.kernel_size - 1
@@ -289,26 +267,103 @@ class Demucs(nn.Module):
 
         return int(length)
 
+def load_pretrain(model, state_dict): # pylint: disable=redefined-outer-name
+    """
+    This code load the Demucs model's weight with the actual weight available online.
+    Used only for pre-training. The code here is generated.
+    """
+    loaded_keys = {}
+    loaded_keys['decoder.0.0.bias'  ] = 'decoder.0.0.bias'   # torch.Size([4096])
+    loaded_keys['decoder.0.0.weight'] = 'decoder.0.0.weight' # torch.Size([4096, 2048, 3])
+    loaded_keys['decoder.0.2.bias'  ] = 'decoder.0.2.bias'   # torch.Size([1024])
+    loaded_keys['decoder.0.2.weight'] = 'decoder.0.2.weight' # torch.Size([2048, 1024, 8])
+    loaded_keys['decoder.1.0.bias'  ] = 'decoder.1.0.bias'   # torch.Size([2048])
+    loaded_keys['decoder.1.0.weight'] = 'decoder.1.0.weight' # torch.Size([2048, 1024, 3])
+    loaded_keys['decoder.1.2.bias'  ] = 'decoder.1.2.bias'   # torch.Size([512])
+    loaded_keys['decoder.1.2.weight'] = 'decoder.1.2.weight' # torch.Size([1024, 512, 8])
+    loaded_keys['decoder.2.0.bias'  ] = 'decoder.2.0.bias'   # torch.Size([1024])
+    loaded_keys['decoder.2.0.weight'] = 'decoder.2.0.weight' # torch.Size([1024, 512, 3])
+    loaded_keys['decoder.2.2.bias'  ] = 'decoder.2.2.bias'   # torch.Size([256])
+    loaded_keys['decoder.2.2.weight'] = 'decoder.2.2.weight' # torch.Size([512, 256, 8])
+    loaded_keys['decoder.3.0.bias'  ] = 'decoder.3.0.bias'   # torch.Size([512])
+    loaded_keys['decoder.3.0.weight'] = 'decoder.3.0.weight' # torch.Size([512, 256, 3])
+    loaded_keys['decoder.3.2.bias'  ] = 'decoder.3.2.bias'   # torch.Size([128])
+    loaded_keys['decoder.3.2.weight'] = 'decoder.3.2.weight' # torch.Size([256, 128, 8])
+    loaded_keys['decoder.4.0.bias'  ] = 'decoder.4.0.bias'   # torch.Size([256])
+    loaded_keys['decoder.4.0.weight'] = 'decoder.4.0.weight' # torch.Size([256, 128, 3])
+    loaded_keys['decoder.4.2.bias'  ] = 'decoder.4.2.bias'   # torch.Size([64])
+    loaded_keys['decoder.4.2.weight'] = 'decoder.4.2.weight' # torch.Size([128, 64, 8])
+    loaded_keys['decoder.5.0.bias'  ] = 'decoder.5.0.bias'   # torch.Size([128])
+    loaded_keys['decoder.5.0.weight'] = 'decoder.5.0.weight' # torch.Size([128, 64, 3])
+    # loaded_keys['decoder.5.2.bias'  ] = 'decoder.5.2.bias'   # torch.Size([8])          # Output layer
+    # loaded_keys['decoder.5.2.weight'] = 'decoder.5.2.weight' # torch.Size([64, 8, 8])   # Output layer
+    # loaded_keys['encoder.0.0.bias'  ] = 'encoder.0.0.bias'   # torch.Size([64])         # Input layer
+    # loaded_keys['encoder.0.0.weight'] = 'encoder.0.0.weight' # torch.Size([64, 2, 8])   # Input layer
+    loaded_keys['encoder.0.2.bias'  ] = 'encoder.0.2.bias'   # torch.Size([128])
+    loaded_keys['encoder.0.2.weight'] = 'encoder.0.2.weight' # torch.Size([128, 64, 1])
+    loaded_keys['encoder.1.0.bias'  ] = 'encoder.1.0.bias'   # torch.Size([128])
+    loaded_keys['encoder.1.0.weight'] = 'encoder.1.0.weight' # torch.Size([128, 64, 8])
+    loaded_keys['encoder.1.2.bias'  ] = 'encoder.1.2.bias'   # torch.Size([256])
+    loaded_keys['encoder.1.2.weight'] = 'encoder.1.2.weight' # torch.Size([256, 128, 1])
+    loaded_keys['encoder.2.0.bias'  ] = 'encoder.2.0.bias'   # torch.Size([256])
+    loaded_keys['encoder.2.0.weight'] = 'encoder.2.0.weight' # torch.Size([256, 128, 8])
+    loaded_keys['encoder.2.2.bias'  ] = 'encoder.2.2.bias'   # torch.Size([512])
+    loaded_keys['encoder.2.2.weight'] = 'encoder.2.2.weight' # torch.Size([512, 256, 1])
+    loaded_keys['encoder.3.0.bias'  ] = 'encoder.3.0.bias'   # torch.Size([512])
+    loaded_keys['encoder.3.0.weight'] = 'encoder.3.0.weight' # torch.Size([512, 256, 8])
+    loaded_keys['encoder.3.2.bias'  ] = 'encoder.3.2.bias'   # torch.Size([1024])
+    loaded_keys['encoder.3.2.weight'] = 'encoder.3.2.weight' # torch.Size([1024, 512, 1])
+    loaded_keys['encoder.4.0.bias'  ] = 'encoder.4.0.bias'   # torch.Size([1024])
+    loaded_keys['encoder.4.0.weight'] = 'encoder.4.0.weight' # torch.Size([1024, 512, 8])
+    loaded_keys['encoder.4.2.bias'  ] = 'encoder.4.2.bias'   # torch.Size([2048])
+    loaded_keys['encoder.4.2.weight'] = 'encoder.4.2.weight' # torch.Size([2048, 1024, 1])
+    loaded_keys['encoder.5.0.bias'  ] = 'encoder.5.0.bias'   # torch.Size([2048])
+    loaded_keys['encoder.5.0.weight'] = 'encoder.5.0.weight' # torch.Size([2048, 1024, 8])
+    loaded_keys['encoder.5.2.bias'  ] = 'encoder.5.2.bias'   # torch.Size([4096])
+    loaded_keys['encoder.5.2.weight'] = 'encoder.5.2.weight' # torch.Size([4096, 2048, 1])
+    loaded_keys['lstm_linear.bias'                ] = 'lstm.linear.bias'                 # torch.Size([2048])
+    loaded_keys['lstm_linear.weight'              ] = 'lstm.linear.weight'               # torch.Size([2048, 4096])
+    loaded_keys['lstm.bias_hh_l0'                 ] = 'lstm.lstm.bias_hh_l0'             # torch.Size([8192])
+    loaded_keys['lstm.bias_hh_l0_reverse'         ] = 'lstm.lstm.bias_hh_l0_reverse'     # torch.Size([8192])
+    loaded_keys['lstm.bias_hh_l1'                 ] = 'lstm.lstm.bias_hh_l1'             # torch.Size([8192])
+    loaded_keys['lstm.bias_hh_l1_reverse'         ] = 'lstm.lstm.bias_hh_l1_reverse'     # torch.Size([8192])
+    loaded_keys['lstm.bias_ih_l0'                 ] = 'lstm.lstm.bias_ih_l0'             # torch.Size([8192])
+    loaded_keys['lstm.bias_ih_l0_reverse'         ] = 'lstm.lstm.bias_ih_l0_reverse'     # torch.Size([8192])
+    loaded_keys['lstm.bias_ih_l1'                 ] = 'lstm.lstm.bias_ih_l1'             # torch.Size([8192])
+    loaded_keys['lstm.bias_ih_l1_reverse'         ] = 'lstm.lstm.bias_ih_l1_reverse'     # torch.Size([8192])
+    loaded_keys['lstm.weight_hh_l0'               ] = 'lstm.lstm.weight_hh_l0'           # torch.Size([8192, 2048])
+    loaded_keys['lstm.weight_hh_l0_reverse'       ] = 'lstm.lstm.weight_hh_l0_reverse'   # torch.Size([8192, 2048])
+    loaded_keys['lstm.weight_hh_l1'               ] = 'lstm.lstm.weight_hh_l1'           # torch.Size([8192, 2048])
+    loaded_keys['lstm.weight_hh_l1_reverse'       ] = 'lstm.lstm.weight_hh_l1_reverse'   # torch.Size([8192, 2048])
+    loaded_keys['lstm.weight_ih_l0'               ] = 'lstm.lstm.weight_ih_l0'           # torch.Size([8192, 2048])
+    loaded_keys['lstm.weight_ih_l0_reverse'       ] = 'lstm.lstm.weight_ih_l0_reverse'   # torch.Size([8192, 2048])
+    loaded_keys['lstm.weight_ih_l1'               ] = 'lstm.lstm.weight_ih_l1'           # torch.Size([8192, 4096])
+    loaded_keys['lstm.weight_ih_l1_reverse'       ] = 'lstm.lstm.weight_ih_l1_reverse'   # torch.Size([8192, 4096])
+    for key in loaded_keys:
+        print("Load {} (shape = {}) from the pretrained model".format(key, state_dict[loaded_keys[key]].shape))
+        _ = model.load_state_dict({key: state_dict[loaded_keys[key]]}, strict=False)
+
 if __name__ == '__main__':
-    model = Demucs(sources=1, # voice
-                   n_audio_channels=2, # left/right mics
-                   )
-
-    n_sources = 1
-    n_audio_channels = 2
+    # Sample network with dummy input
+    n_sources = 2
+    n_audio_channels = 8
     length = 2**16
-    dummy = torch.zeros((n_audio_channels, length))
-    print("input shape = {}".format(dummy.shape))
+    model = Demucs(sources=n_sources, n_audio_channels=n_audio_channels)
 
-    # padd
+    # input
+    dummy = torch.zeros((n_audio_channels, length))
+    print("input's shape = {}".format(dummy.shape))
+
+    # padded input
     valid_length = model.valid_length(length)
     delta = valid_length - length
     padded = F.pad(dummy, (delta // 2, delta - delta // 2))
     dummy_padded = padded.unsqueeze(0)
-    print("input padded shape = {}".format(dummy_padded.shape))
+    print("padded input's shape = {}".format(dummy_padded.shape))
+
+    # output
     output, locs = model(dummy_padded)
     output_trimmed = center_trim(output, dummy)
     locs_trimmed = center_trim(locs, dummy)
-    print(output_trimmed.shape)
-    print("output shape = {}".format(output_trimmed.shape))
-    print("locs shape = {}".format(locs_trimmed.shape))
+    print("output's shape = {}".format(output_trimmed.shape))
+    print("locs' shape = {}".format(locs_trimmed.shape))
