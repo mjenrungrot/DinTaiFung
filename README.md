@@ -2,7 +2,8 @@
 
 # Repository Overview
 
-- `classes.py` and `constants.py` are for creating/rendering a `Microphone`, `SoundSource`, and `Scene` objects. 
+- `classes.py` and `constants.py` are for creating/rendering a `Microphone`, `SoundSource`, and `Scene` objects.
+   These were pulled from `https://github.com/vivjay30/d3audiorecon/tree/8fd7181562af5f0e7eb84b38606c5209ef42bf2f`.
 - `data.py` has a PyTorch's `Dataset` class that handles all required preprocessing steps.
 - `demo.ipynb` is used for demo. The notebook has the code for creating output audio.
 - `network.py` has the network architecture and the loss function.
