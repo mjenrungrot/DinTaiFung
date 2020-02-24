@@ -20,7 +20,8 @@
 
 __Dataset generation__
 
-Here's the code for generating the dataset `1_voice_1_bg_hard`.
+Here's the code for generating the dataset `1_voice_1_bg_hard`. Note that `--bg_factor` specifies the multiplicative factor
+of the background signal.
 
 ```
 cd dataset_generators/1_voice_1_bg
