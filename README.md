@@ -65,4 +65,4 @@ CUDA_VISIBLE_DEVICES=1,2 python train.py \
 __Inference__
 
 See `demo.ipynb`. This notebook will load a single checkpoint and run a forward-pass on a single example. 
-The code is stil under development and should be used with cautions.
+The code is still under development and should be used with cautions.
