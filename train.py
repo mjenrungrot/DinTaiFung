@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import torch.utils.tensorboard as tensorboard
 
 from data import SpatialAudioDatasetWaveform
-from network import Demucs, center_trim, load_pretrain # pylint: disable=unused-import
+from network import Demucs, center_trim, left_trim, load_pretrain # pylint: disable=unused-import
 
 SAMPLING_RATE = 22050
 USE_CUDA = True
@@ -39,10 +39,7 @@ def train_epoch(model: nn.Module,
     combined_losses = []
     for batch_idx, (data, label_voice_signals, label_bg_signals, label_voice_locs, label_bg_locs) in enumerate(train_loader):
         data = data.to(device)
-        label_voice_signals = label_voice_signals.to(device)
-        label_bg_signals = label_bg_signals.to(device)
-        label_voice_locs = label_voice_locs.to(device)
-        label_bg_locs = label_bg_locs.to(device)
+        label_voice_signals = label_voice_signals.to(device)[:, 0, 0, :]
 
         # Normalize input
         data = (data * 2**15).round() / 2**15
@@ -58,35 +55,23 @@ def train_epoch(model: nn.Module,
         else:
             valid_length = model.valid_length(data.shape[-1])
         delta = valid_length - data.shape[-1]
-        padded = F.pad(data, (delta // 2, delta - delta // 2))
+        padded = F.pad(data, (0, delta))
 
         output_signal, output_locs = model(padded)
-        output_signal = center_trim(output_signal, data)
-        output_locs = center_trim(output_locs, data)
+        output_signal = left_trim(output_signal, data)
+        output_locs = left_trim(output_locs, data)
 
         # Un-normalize
         output_signal = output_signal * ref.std() + ref.mean()
-        output_voices = output_signal[:, :label_voice_signals.shape[1]]
-        output_voice_locs = output_locs[:, :label_voice_locs.shape[1]]
-        output_backgrounds = output_signal[:, label_voice_signals.shape[1] : label_voice_signals.shape[1] + label_bg_signals.shape[1]]
-        output_background_locs = output_locs[:, label_voice_locs.shape[1] : label_voice_locs.shape[1] + label_bg_locs.shape[1]]
+        output_voices = output_signal[:, 0, :]
 
         if data_parallel:
-            loss, info = model.module.loss(data,
-                                     output_voices, label_voice_signals,
-                                     output_backgrounds, label_bg_signals,
-                                     output_voice_locs, label_voice_locs,
-                                     output_background_locs, label_bg_locs)
+            loss, info = model.module.voice_loss(output_voices, label_voice_signals)
         else:
-            loss, info = model.loss(data,
-                              output_voices, label_voice_signals,
-                              output_backgrounds, label_bg_signals,
-                              output_voice_locs, label_voice_locs,
-                              output_background_locs, label_bg_locs)
+            loss, info = model.voice_loss(output_voices, label_voice_signals)
+
         interval_losses.append(loss.item())
         voice_losses.append(info['reconstruction_voices_loss'].item())
-        bg_losses.append(info['reconstruction_bg_loss'].item())
-        combined_losses.append(info['reconstruction_combined_loss'].item())
 
         # Backpropagation
         loss.backward()
@@ -114,8 +99,6 @@ def train_epoch(model: nn.Module,
     if writer:
         writer.add_scalar('Loss/train', np.mean(losses), epoch)
         writer.add_scalar('Loss_voice/train', np.mean(voice_losses), epoch)
-        writer.add_scalar('Loss_bg/train', np.mean(bg_losses), epoch)
-        writer.add_scalar('Loss_combined/train', np.mean(combined_losses), epoch)
         writer.flush()
 
     return np.mean(losses)
@@ -139,10 +122,7 @@ def test_epoch(model: nn.Module,
     with torch.no_grad():
         for batch_idx, (data, label_voice_signals, label_bg_signals, label_voice_locs, label_bg_locs) in enumerate(test_loader):
             data = data.to(device)
-            label_voice_signals = label_voice_signals.to(device)
-            label_bg_signals = label_bg_signals.to(device)
-            label_voice_locs = label_voice_locs.to(device)
-            label_bg_locs = label_bg_locs.to(device)
+            label_voice_signals = label_voice_signals.to(device)[:, 0, 0, :]
 
             # Normalize input
             transformed_data = (data * 2**15).round() / 2**15
@@ -155,35 +135,23 @@ def test_epoch(model: nn.Module,
             else:
                 valid_length = model.valid_length(transformed_data.shape[-1])
             delta = valid_length - transformed_data.shape[-1]
-            padded = F.pad(transformed_data, (delta // 2, delta - delta // 2))
+            padded = F.pad(transformed_data, (0, delta))
 
             output_signal, output_locs = model(padded)
-            output_signal = center_trim(output_signal, transformed_data)
-            output_locs = center_trim(output_locs, transformed_data)
+            output_signal = left_trim(output_signal, transformed_data)
+            output_locs = left_trim(output_locs, transformed_data)
 
             # Un-normalize
             output_signal = output_signal * ref.std() + ref.mean()
-            output_voices = output_signal[:, :label_voice_signals.shape[1]]
-            output_voice_locs = output_locs[:, :label_voice_locs.shape[1]]
-            output_backgrounds = output_signal[:, label_voice_signals.shape[1] : label_voice_signals.shape[1] + label_bg_signals.shape[1]]
-            output_background_locs = output_locs[:, label_voice_locs.shape[1] : label_voice_locs.shape[1] + label_bg_locs.shape[1]]
+            output_voices = output_signal[:, 0, :]
 
             if data_parallel:
-                loss, info = model.module.loss(data,
-                                         output_voices, label_voice_signals,
-                                         output_backgrounds, label_bg_signals,
-                                         output_voice_locs, label_voice_locs,
-                                         output_background_locs, label_bg_locs)
+                loss, info = model.module.voice_loss(output_voices, label_voice_signals)
             else:
-                loss, info = model.loss(data,
-                                  output_voices, label_voice_signals,
-                                  output_backgrounds, label_bg_signals,
-                                  output_voice_locs, label_voice_locs,
-                                  output_background_locs, label_bg_locs)
+                loss, info = model.voice_loss(output_voices, label_voice_signals)
+
             test_loss += loss
             voice_losses.append(info['reconstruction_voices_loss'].item())
-            bg_losses.append(info['reconstruction_bg_loss'].item())
-            combined_losses.append(info['reconstruction_combined_loss'].item())
 
             if batch_idx % log_interval == 0:
                 print("Loss: {}".format(loss))
@@ -201,8 +169,6 @@ def test_epoch(model: nn.Module,
         if writer:
             writer.add_scalar('Loss/test', test_loss, epoch)
             writer.add_scalar('Loss_voice/test', np.mean(voice_losses), epoch)
-            writer.add_scalar('Loss_bg/test', np.mean(bg_losses), epoch)
-            writer.add_scalar('Loss_combined/test', np.mean(combined_losses), epoch)
             writer.flush()
 
         return test_loss
@@ -253,7 +219,7 @@ def train(args: argparse.Namespace):
 
     # Load pretrain
     if args.pretrain:
-        pretrain_state_dict = torch.load('models/demucs_extra_state_dict.pt')
+        pretrain_state_dict = torch.load("/projects/grail/audiovisual/models/light_extra_state_dict.pt")
         load_pretrain(model, pretrain_state_dict)
 
     # Load the model if `args.start_epoch` is greater than 0. This will load the model from

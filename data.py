@@ -7,6 +7,7 @@ from scipy.io import wavfile
 import librosa
 
 GLOBAL_SAMPLE_RATE: int = 22050
+SPEED_OF_SOUND = 343.0  # m/s
 
 def read_file(filename, sample_rate: Optional[int] = None, trim: bool = False) -> Tuple[np.ndarray, int]:
     """
@@ -48,6 +49,14 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         curr_dir = self.dirs[idx]
 
+        # Get metadata
+        with open(Path(curr_dir) / 'metadata.json') as json_file:
+            json_data = json.load(json_file)
+            locs_voices = json_data['voice']['position']
+            locs_bg = json_data['bg']['position']
+        locs_voices = torch.tensor(locs_voices)
+        locs_bg = torch.tensor(locs_bg)
+
         mic_files = sorted(list(Path(curr_dir).rglob('*mixed.wav')))
         # Mixed signals
         mixed_waveforms = []
@@ -55,6 +64,7 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
             mixed_waveform, _ = librosa.core.load(mic_file, self.sr, mono=True)
             mixed_waveforms.append(torch.from_numpy(mixed_waveform))
         mixed_data = torch.tensor(np.stack(mixed_waveforms)).float()
+        mixed_data = self.shift_input(mixed_data, np.array(locs_voices))
 
         # GT voice signals
         gt_voice_data = []
@@ -64,7 +74,7 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
             for _, gt_audio_file in enumerate(gt_audio_files):
                 gt_waveform, _ = librosa.core.load(gt_audio_file, self.sr, mono=True)
                 gt_waveforms.append(torch.from_numpy(gt_waveform))
-            gt_voice_data.append(torch.tensor(np.stack(gt_waveforms)).float())
+            gt_voice_data.append(self.shift_input(torch.tensor(np.stack(gt_waveforms)).float(), np.array(locs_voices)))
         gt_voice_data = torch.stack(gt_voice_data, dim=0)
         
         # GT background signals
@@ -78,15 +88,26 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
             gt_bg_data.append(torch.tensor(np.stack(gt_waveforms)).float())
         gt_bg_data = torch.stack(gt_bg_data, dim=0)
 
-        # Get metadata
-        with open(Path(curr_dir) / 'metadata.json') as json_file:
-            json_data = json.load(json_file)
-            locs_voices = json_data['voice']['position']
-            locs_bg = json_data['bg']['position']
-        locs_voices = torch.tensor(locs_voices)
-        locs_bg = torch.tensor(locs_bg)
+
 
         return (mixed_data, gt_voice_data, gt_bg_data, locs_voices, locs_bg)
+
+    def shift_input(self, input_data, input_position):
+        """
+        Shifts the input according to the voice position. This tried to
+        line up the voice samples in the time domain
+        """
+        radius = 0.145 / 2
+        num_channels = input_data.shape[0]
+        mic_array = [[radius * np.cos(2 * np.pi / num_channels * i), radius * np.sin(2 * np.pi / num_channels * i), 0] for i in range(6)]
+
+        for channel_idx in range(num_channels):
+            distance = np.linalg.norm(mic_array[channel_idx] - input_position)
+            shift_time = distance / SPEED_OF_SOUND
+            shift_samples = int(GLOBAL_SAMPLE_RATE * shift_time)
+            input_data[channel_idx] = torch.roll(input_data[channel_idx], -shift_samples)
+
+        return input_data
 
 if __name__ == '__main__':
     data_train = SpatialAudioDatasetWaveform('/projects/grail/audiovisual/datasets/DinTaiFung/mics_8_radius_3_voice_1_bg_1/train')

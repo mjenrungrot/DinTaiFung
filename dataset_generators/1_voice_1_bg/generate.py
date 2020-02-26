@@ -1,8 +1,5 @@
 import os
 import sys
-currentdir = os.path.dirname(os.path.realpath(__file__))
-parentdir = os.path.dirname(currentdir)
-sys.path.append(parentdir)
 
 import argparse
 import json
@@ -14,7 +11,7 @@ import tqdm
 import random
 import multiprocessing.dummy as mp
 
-from classes import Microphone, SoundSource, Scene
+from d3audiorecon.renderer.classes import Microphone, SoundSource, Scene
 
 def generate_mic_array(radius: float = 0.145 / 2, n_mics: int = 6) -> List[Microphone]:
     """
@@ -75,7 +72,7 @@ def generate_sample(args: argparse.Namespace,
     scene = Scene([voice, bg], mic_array)
 
     # [5]
-    scene.render(cutoff_time=3.0)
+    scene.render(cutoff_time=3.0, geometric_attenuation=False, atmospheric_attenuation=False)
     Path(output_prefix_dir).mkdir(parents=True, exist_ok=True)
     for i, mic in enumerate(mic_array):
         output_prefix = str(Path(output_prefix_dir) / "mic{:02d}_".format(i))

@@ -35,6 +35,19 @@ def center_trim(tensor, reference):
         tensor = tensor[..., diff // 2:-(diff - diff // 2)]
     return tensor
 
+def left_trim(tensor, reference):
+    """
+    Trim a tensor to match with the dimension of `reference`. Trims only the end.
+    """
+    if hasattr(reference, "size"):
+        reference = reference.size(-1)
+    diff = tensor.size(-1) - reference
+    if diff < 0:
+        raise ValueError("tensor must be larger than reference")
+    if diff:
+        tensor = tensor[..., 0:-diff]
+    return tensor
+
 def upsample(x, stride):
     """
     Bi-linearly upsample a tensor with a given stride.
@@ -110,7 +123,7 @@ class Demucs(nn.Module):
                 if upsample:
                     out_channels = channels
                 else:
-                    out_channels = sources * n_audio_channels
+                    out_channels = 1
                     out_loc_channels = sources * 3
 
             decode += [nn.Conv1d(channels, 2 * channels, context), activation]
@@ -191,7 +204,7 @@ class Demucs(nn.Module):
             x = self.final(x)
 
         # Reformat the output
-        x = x.view(x.size(0), self.sources, self.n_audio_channels, x.size(-1))
+        x = x.view(x.size(0), 1, x.size(-1))
         locs = locs.view(locs.size(0), self.sources, 3, locs.size(-1))
         return x, locs
 
@@ -242,9 +255,19 @@ class Demucs(nn.Module):
             'reconstruction_bg_loss': reconstruction_bg_loss,
             'reconstruction_combined_loss': reconstruction_combined_loss,
         }
-        loss_val = reconstruction_voices_loss + \
-            reconstruction_bg_loss
+        loss_val = reconstruction_voices_loss
+
         return loss_val, info
+
+    def voice_loss(self, voice_signals, gt_voice_signals):
+        reconstruction_voices_loss = F.l1_loss(voice_signals, gt_voice_signals)
+
+        info = {
+            'reconstruction_voices_loss': reconstruction_voices_loss,
+        }
+
+        return reconstruction_voices_loss, info
+
 
     def valid_length(self, length: int) -> int: # pylint: disable=redefined-outer-name
         """
@@ -340,8 +363,12 @@ def load_pretrain(model, state_dict): # pylint: disable=redefined-outer-name
     loaded_keys['lstm.weight_ih_l1'               ] = 'lstm.lstm.weight_ih_l1'           # torch.Size([8192, 4096])
     loaded_keys['lstm.weight_ih_l1_reverse'       ] = 'lstm.lstm.weight_ih_l1_reverse'   # torch.Size([8192, 4096])
     for key in loaded_keys:
-        print("Load {} (shape = {}) from the pretrained model".format(key, state_dict[loaded_keys[key]].shape))
+        #try:
         _ = model.load_state_dict({key: state_dict[loaded_keys[key]]}, strict=False)
+        print("Load {} (shape = {}) from the pretrained model".format(key, state_dict[loaded_keys[key]].shape))
+        # except:
+        #     print("Failed to load {}".format(key))
+        #     pass
 
 if __name__ == '__main__':
     # Sample network with dummy input
