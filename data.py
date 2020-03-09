@@ -57,7 +57,12 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
         locs_voices = torch.tensor(locs_voices)
         locs_bg = torch.tensor(locs_bg)
 
-        mic_files = sorted(list(Path(curr_dir).rglob('*mixed.wav')))
+        # mic_files = sorted(list(Path(curr_dir).rglob('*mixed.wav')))
+        if np.random.uniform() < 0.3: # With 30% chance use the non-reverb sources
+            mic_files = sorted(list(Path(curr_dir).rglob('*original_mixed.wav')))
+        else:
+            mic_files = sorted(list(Path(curr_dir).rglob('*reverb_mixed.wav')))
+
         # Mixed signals
         mixed_waveforms = []
         for _, mic_file in enumerate(mic_files):
@@ -69,7 +74,8 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
         # GT voice signals
         gt_voice_data = []
         for source in range(self.n_sources):
-            gt_audio_files = sorted(list(Path(curr_dir).rglob('*source{:02d}*.wav'.format(source))))
+            #gt_audio_files = sorted(list(Path(curr_dir).rglob('*source{:02d}*.wav'.format(source))))
+            gt_audio_files = sorted(list(Path(curr_dir).rglob('*original_source{:02d}*.wav'.format(source))))
             gt_waveforms = []
             for _, gt_audio_file in enumerate(gt_audio_files):
                 gt_waveform, _ = librosa.core.load(gt_audio_file, self.sr, mono=True)
@@ -80,7 +86,8 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
         # GT background signals
         gt_bg_data = []
         for source in range(self.n_sources, self.n_sources + self.n_backgrounds):
-            gt_audio_files = sorted(list(Path(curr_dir).rglob('*source{:02d}*.wav'.format(source))))
+            #gt_audio_files = sorted(list(Path(curr_dir).rglob('*source{:02d}*.wav'.format(source))))
+            gt_audio_files = sorted(list(Path(curr_dir).rglob('*original_source{:02d}*.wav'.format(source))))
             gt_waveforms = []
             for _, gt_audio_file in enumerate(gt_audio_files):
                 gt_waveform, _ = librosa.core.load(gt_audio_file, self.sr, mono=True)

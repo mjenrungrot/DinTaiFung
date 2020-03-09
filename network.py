@@ -123,7 +123,7 @@ class Demucs(nn.Module):
                 if upsample:
                     out_channels = channels
                 else:
-                    out_channels = 1
+                    out_channels = sources * n_audio_channels
                     out_loc_channels = sources * 3
 
             decode += [nn.Conv1d(channels, 2 * channels, context), activation]
@@ -204,7 +204,7 @@ class Demucs(nn.Module):
             x = self.final(x)
 
         # Reformat the output
-        x = x.view(x.size(0), 1, x.size(-1))
+        x = x.view(x.size(0), self.sources, self.n_audio_channels, x.size(-1))
         locs = locs.view(locs.size(0), self.sources, 3, locs.size(-1))
         return x, locs
 
@@ -255,7 +255,8 @@ class Demucs(nn.Module):
             'reconstruction_bg_loss': reconstruction_bg_loss,
             'reconstruction_combined_loss': reconstruction_combined_loss,
         }
-        loss_val = reconstruction_voices_loss
+        loss_val = reconstruction_voices_loss + \
+            reconstruction_bg_loss
 
         return loss_val, info
 

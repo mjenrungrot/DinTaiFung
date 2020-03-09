@@ -54,28 +54,51 @@ def generate_sample(args: argparse.Namespace,
     voice, _ = librosa.core.load(voice_files[0], sr=sr, mono=True)
 
     # [2]
+    if args.bg_factor >= 0:
+        bg_factor = args.bg_factor
+    else:
+        bg_factor = np.random.uniform()
+
     voice_length = len(voice)
     bg_length = len(bg)
     bg_start_idx = np.random.randint(bg_length - voice_length) # [0, bg_length - voice_length)
     sample_bg = bg[bg_start_idx: bg_start_idx + voice_length] * args.bg_factor
 
     # [3]
-    r = np.random.uniform(low=2.0, high=5.0)
-    theta = np.random.uniform(low=0, high=2*np.pi)
+    bg_radius = np.random.uniform(low=2.0, high=5.0)
+    bg_theta = np.random.uniform(low=0, high=2*np.pi)
+
+    voice_radius = np.random.uniform(low=1.0, high=5.0)
+    voice_theta = np.random.uniform(low=0, high=2*np.pi)
 
     # [4]
-    mic_array = generate_mic_array()
-    voice_loc = [1.0 * np.cos(0), 1.0 * np.sin(0), 0]
-    bg_loc = [r * np.cos(theta), r * np.sin(theta), 0]
+    mic_array = generate_mic_array(radius=0.1016)  # 4 inches
+    voice_loc = [voice_radius * np.cos(voice_theta), voice_radius * np.sin(voice_theta), 0]
+    bg_loc = [bg_radius * np.cos(bg_theta), bg_radius * np.sin(bg_theta), 0]
     voice = SoundSource(position=voice_loc, data=voice, sr=sr)
     bg = SoundSource(position=bg_loc, data=sample_bg, sr=sr)
     scene = Scene([voice, bg], mic_array)
 
     # [5]
-    scene.render(cutoff_time=3.0, geometric_attenuation=False, atmospheric_attenuation=False)
+    scene.render(cutoff_time=3.0,
+                 geometric_attenuation=False,
+                 atmospheric_attenuation=False,
+                 random_shift=0.0508,  # Corresponds to 2 inches of mic pos error
+                 random_reverb=True)
     Path(output_prefix_dir).mkdir(parents=True, exist_ok=True)
     for i, mic in enumerate(mic_array):
-        output_prefix = str(Path(output_prefix_dir) / "mic{:02d}_".format(i))
+        output_prefix = str(Path(output_prefix_dir) / "mic{:02d}_reverb_".format(i))
+        mic.save(output_prefix)
+        mic.reset()
+
+    scene = Scene([voice, bg], mic_array)
+    scene.render(cutoff_time=3.0,
+                 geometric_attenuation=False,
+                 atmospheric_attenuation=False)
+
+    Path(output_prefix_dir).mkdir(parents=True, exist_ok=True)
+    for i, mic in enumerate(mic_array):
+        output_prefix = str(Path(output_prefix_dir) / "mic{:02d}_original_".format(i))
         mic.save(output_prefix)
         mic.reset()
 
@@ -116,7 +139,7 @@ if __name__ == '__main__':
     parser.add_argument('--output_path', type=str, default='./outputs')
     parser.add_argument('--n_outputs', type=int, default=10000)
     parser.add_argument('--n_workers', type=int, default=8)
-    parser.add_argument('--bg_factor', type=float, default=1.0)
+    parser.add_argument('--bg_factor', type=float, default=1.0, help="Enter a negative number for random bg factor")
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--sr', type=int, default=22050)
     main(parser.parse_args())

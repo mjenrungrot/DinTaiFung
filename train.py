@@ -39,7 +39,7 @@ def train_epoch(model: nn.Module,
     combined_losses = []
     for batch_idx, (data, label_voice_signals, label_bg_signals, label_voice_locs, label_bg_locs) in enumerate(train_loader):
         data = data.to(device)
-        label_voice_signals = label_voice_signals.to(device)[:, 0, 0, :]
+        label_voice_signals = label_voice_signals.to(device)
 
         # Normalize input
         data = (data * 2**15).round() / 2**15
@@ -55,15 +55,15 @@ def train_epoch(model: nn.Module,
         else:
             valid_length = model.valid_length(data.shape[-1])
         delta = valid_length - data.shape[-1]
-        padded = F.pad(data, (0, delta))
+        padded = F.pad(data, (delta // 2, delta - delta // 2))
 
         output_signal, output_locs = model(padded)
-        output_signal = left_trim(output_signal, data)
-        output_locs = left_trim(output_locs, data)
+        output_signal = center_trim(output_signal, data)
+        output_locs = center_trim(output_locs, data)
 
         # Un-normalize
         output_signal = output_signal * ref.std() + ref.mean()
-        output_voices = output_signal[:, 0, :]
+        output_voices = output_signal[:, 0:1]
 
         if data_parallel:
             loss, info = model.module.voice_loss(output_voices, label_voice_signals)
@@ -122,7 +122,7 @@ def test_epoch(model: nn.Module,
     with torch.no_grad():
         for batch_idx, (data, label_voice_signals, label_bg_signals, label_voice_locs, label_bg_locs) in enumerate(test_loader):
             data = data.to(device)
-            label_voice_signals = label_voice_signals.to(device)[:, 0, 0, :]
+            label_voice_signals = label_voice_signals.to(device)
 
             # Normalize input
             transformed_data = (data * 2**15).round() / 2**15
@@ -135,15 +135,15 @@ def test_epoch(model: nn.Module,
             else:
                 valid_length = model.valid_length(transformed_data.shape[-1])
             delta = valid_length - transformed_data.shape[-1]
-            padded = F.pad(transformed_data, (0, delta))
+            padded = F.pad(transformed_data, (delta // 2, delta - delta // 2))
 
             output_signal, output_locs = model(padded)
-            output_signal = left_trim(output_signal, transformed_data)
-            output_locs = left_trim(output_locs, transformed_data)
+            output_signal = center_trim(output_signal, transformed_data)
+            output_locs = center_trim(output_locs, transformed_data)
 
             # Un-normalize
             output_signal = output_signal * ref.std() + ref.mean()
-            output_voices = output_signal[:, 0, :]
+            output_voices = output_signal[:, 0:1]
 
             if data_parallel:
                 loss, info = model.module.voice_loss(output_voices, label_voice_signals)
@@ -219,8 +219,14 @@ def train(args: argparse.Namespace):
 
     # Load pretrain
     if args.pretrain:
-        pretrain_state_dict = torch.load("/projects/grail/audiovisual/models/light_extra_state_dict.pt")
-        load_pretrain(model, pretrain_state_dict)
+        # pretrain_state_dict = torch.load("/projects/grail/vjayaram/DinTaiFung/checkpoints/shifted_input_nchannels_167.pt")
+        # load_pretrain(model, pretrain_state_dict)
+        checkpoint_path = Path(args.checkpoints_dir) / "shifted_input_nchannels_167.pt"
+        state_dict = torch.load(checkpoint_path)
+        if isinstance(model, torch.nn.DataParallel):
+            model.module.load_state_dict(state_dict)
+        else:
+            model.load_state_dict(state_dict)
 
     # Load the model if `args.start_epoch` is greater than 0. This will load the model from
     # epoch = `args.start_epoch - 1`
