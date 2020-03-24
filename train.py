@@ -219,14 +219,14 @@ def train(args: argparse.Namespace):
 
     # Load pretrain
     if args.pretrain:
-        # pretrain_state_dict = torch.load("/projects/grail/vjayaram/DinTaiFung/checkpoints/shifted_input_nchannels_167.pt")
-        # load_pretrain(model, pretrain_state_dict)
-        checkpoint_path = Path(args.checkpoints_dir) / "shifted_input_nchannels_167.pt"
-        state_dict = torch.load(checkpoint_path)
-        if isinstance(model, torch.nn.DataParallel):
-            model.module.load_state_dict(state_dict)
-        else:
-            model.load_state_dict(state_dict)
+        pretrain_state_dict = torch.load("/projects/grail/audiovisual/models/light_extra_state_dict.pt")
+        load_pretrain(model, pretrain_state_dict)
+        # checkpoint_path = Path(args.checkpoints_dir) / "shifted_input_nchannels_167.pt"
+        # state_dict = torch.load(checkpoint_path)
+        # if isinstance(model, torch.nn.DataParallel):
+        #     model.module.load_state_dict(state_dict)
+        # else:
+        #     model.load_state_dict(state_dict)
 
     # Load the model if `args.start_epoch` is greater than 0. This will load the model from
     # epoch = `args.start_epoch - 1`

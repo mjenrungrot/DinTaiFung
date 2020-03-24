@@ -364,12 +364,12 @@ def load_pretrain(model, state_dict): # pylint: disable=redefined-outer-name
     loaded_keys['lstm.weight_ih_l1'               ] = 'lstm.lstm.weight_ih_l1'           # torch.Size([8192, 4096])
     loaded_keys['lstm.weight_ih_l1_reverse'       ] = 'lstm.lstm.weight_ih_l1_reverse'   # torch.Size([8192, 4096])
     for key in loaded_keys:
-        #try:
-        _ = model.load_state_dict({key: state_dict[loaded_keys[key]]}, strict=False)
-        print("Load {} (shape = {}) from the pretrained model".format(key, state_dict[loaded_keys[key]].shape))
-        # except:
-        #     print("Failed to load {}".format(key))
-        #     pass
+        try:
+            _ = model.load_state_dict({key: state_dict[loaded_keys[key]]}, strict=False)
+            print("Load {} (shape = {}) from the pretrained model".format(key, state_dict[loaded_keys[key]].shape))
+        except:
+            print("Failed to load {}".format(key))
+            pass
 
 if __name__ == '__main__':
     # Sample network with dummy input
