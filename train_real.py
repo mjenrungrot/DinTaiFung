@@ -16,7 +16,9 @@ import soundfile as sf
 from data import SpatialAudioDatasetWaveform, RealDataset
 from network import Demucs, center_trim, left_trim, load_pretrain # pylint: disable=unused-import
 
+SAMPLING_RATE = 32000
 USE_CUDA = True
+np.random.seed(1234567)
 
 def train_epoch(model: nn.Module,
                 device: torch.device,
@@ -84,7 +86,7 @@ def train_epoch(model: nn.Module,
         optimizer.step()
 
         if batch_idx % log_interval == 0:
-            #sf.write("output{}.wav".format(epoch), output_voices[0, 0].detach().cpu().numpy(), SAMPLING_RATE)
+            # sf.write("output{}.wav".format(epoch), output_voices[0, 0].detach().cpu().numpy(), SAMPLING_RATE)
             print("Loss {}".format(loss))
             print("Train Epoch: {} [{}/{} ({:.0f}%)] \t Loss: {:.6f}".format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
@@ -160,9 +162,9 @@ def test_epoch(model: nn.Module,
                 if writer:
                     for data_id in range(min(2, data.size(0))): # Output only maximum 2 audios
                         for mic_id in range(data.size(1)):
-                            writer.add_audio("{}_input_{}".format(data_id, mic_id), data[data_id, mic_id, :], epoch, sample_rate=args.sr)
-                            writer.add_audio("{}_gt_{}".format(data_id, mic_id), label_voice_signals[data_id, 0, mic_id, :], epoch, sample_rate=args.sr)
-                            writer.add_audio("{}_pred_{}".format(data_id, mic_id), output_voices[data_id, 0, mic_id, :], epoch, sample_rate=args.sr)
+                            writer.add_audio("{}_input_{}".format(data_id, mic_id), data[data_id, mic_id, :], epoch, sample_rate=SAMPLING_RATE)
+                            writer.add_audio("{}_gt_{}".format(data_id, mic_id), label_voice_signals[data_id, 0, mic_id, :], epoch, sample_rate=SAMPLING_RATE)
+                            writer.add_audio("{}_pred_{}".format(data_id, mic_id), output_voices[data_id, 0, mic_id, :], epoch, sample_rate=SAMPLING_RATE)
 
         test_loss /= len(test_loader)
         print("\nTest set: Average Loss: {:.4f}\n".format(test_loss))
@@ -180,15 +182,9 @@ def train(args: argparse.Namespace):
     Train the network.
     """
     # Load dataset
+    data_train = RealDataset(args.train_dir, sr=args.sr, num_elements=10000, perturb_prob=1.0)
+    data_test = RealDataset(args.test_dir, sr=args.sr, num_elements=1000)
     device = torch.device('cuda:0')
-    data_train = SpatialAudioDatasetWaveform(args.train_dir, n_sources=1, n_backgrounds=1, sr=args.sr)
-    
-    # data_test = SpatialAudioDatasetWaveform(args.test_dir, n_sources=1, n_backgrounds=1, sr=args.sr)
-    
-    fg_file = '/projects/grail/vjayaram/DinTaiFung/dataset_generators/harry_potter_10min_16b.wav'
-    bg_file = '/projects/grail/vjayaram/DinTaiFung/dataset_generators/background_5min_16b.wav' 
-    data_test = RealDataset(fg_file, bg_file, sr=args.sr)
-
 
     # Set up the device and workers.
     use_cuda = args.use_cuda and torch.cuda.is_available()
@@ -218,8 +214,8 @@ def train(args: argparse.Namespace):
 
     # Set up checkpoints
     save_prefix = args.name
-    if not os.path.exists(args.checkpoints_dir):
-        os.makedirs(args.checkpoints_dir)
+    if not os.path.exists(os.path.join(args.checkpoints_dir, args.name)):
+        os.makedirs(os.path.join(args.checkpoints_dir, args.name))
 
     # Set up the optimizer
     optimizer = optim.Adam(model.parameters(),
@@ -228,8 +224,9 @@ def train(args: argparse.Namespace):
 
     # Load pretrain
     if args.pretrain:
-        pretrain_state_dict = torch.load("checkpoints/2_mics_real_restarted_15.pt")
-        load_pretrain(model, pretrain_state_dict)
+        model.load_state_dict(torch.load('checkpoints/pyroom_reverb_32000_real_test_better_augmentation/pyroom_reverb_32000_real_test_better_augmentation_37.pt'))
+        # pretrain_state_dict = torch.load("checkpoints/pyroom_reverb_32000_real_test_1.pt")
+        # load_pretrain(model, pretrain_state_dict)
         # checkpoint_path = Path(args.checkpoints_dir) / "shifted_input_nchannels_167.pt"
         # state_dict = torch.load(checkpoint_path)
         # if isinstance(model, torch.nn.DataParallel):
@@ -273,15 +270,14 @@ def train(args: argparse.Namespace):
     # Training loop
     try:
         for epoch in range(start_epoch, args.epochs + 1):
-            #test_loss = test_epoch(model, device, test_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
             train_loss = train_epoch(model, device, optimizer, train_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
             test_loss = test_epoch(model, device, test_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
             train_losses.append((epoch, train_loss))
             test_losses.append((epoch, test_loss))
             if args.multiple_GPUs:
-                torch.save(model.module.state_dict(), os.path.join(args.checkpoints_dir, "{}_{}.pt".format(save_prefix, epoch)))
+                torch.save(model.module.state_dict(), os.path.join(args.checkpoints_dir, args.name, "{}_{}.pt".format(save_prefix, epoch)))
             else:
-                torch.save(model.state_dict(), os.path.join(args.checkpoints_dir, "{}_{}.pt".format(save_prefix, epoch)))
+                torch.save(model.state_dict(), os.path.join(args.checkpoints_dir, args.name, "{}_{}.pt".format(save_prefix, epoch)))
     except KeyboardInterrupt:
         print("Interrupted")
     except Exception as _: # pylint: disable=broad-except
