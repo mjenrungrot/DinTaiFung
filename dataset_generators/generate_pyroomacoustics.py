@@ -59,24 +59,23 @@ def generate_sample(args: argparse.Namespace,
 
     all_voices = Path(args.input_voice_dir).rglob('*.wav')
     all_voices = list(all_voices)
-    voice_files = random.sample(all_voices, 1)
-    voice, _ = librosa.core.load(voice_files[0], sr=sr, mono=True)
+
+    num_voices = random.randint(1, 4)  # How many voices to have present
+    print("Num voices {}".format(num_voices))
+    voice_files = random.sample(all_voices, num_voices)
+
+    voices_data = []
+    for voice_file in voice_files:
+        voice, _ = librosa.core.load(voice_file, sr=sr, mono=True)
+        voices_data.append(voice)
 
     # [2]
-    voice_length = len(voice)
+    max_voice_length = max([len(voice) for voice in voices_data])
     bg_length = len(bg)
-    bg_start_idx = np.random.randint(bg_length - voice_length) # [0, bg_length - voice_length)
-    sample_bg = bg[bg_start_idx: bg_start_idx + voice_length]
+    bg_start_idx = np.random.randint(bg_length - max_voice_length) # [0, bg_length - voice_length)
+    sample_bg = bg[bg_start_idx: bg_start_idx + max_voice_length]
 
-    # [3]
-    bg_radius = np.random.uniform(low=2.0, high=6.0)
-    bg_theta = np.random.uniform(low=0, high=2*np.pi)
-
-    voice_radius = np.random.uniform(low=1.0, high=5.0)
-    voice_theta = np.random.uniform(low=0, high=2*np.pi)
-
-    # [4]
-    # Generate room
+    # Generate room parameters
     left_wall = np.random.uniform(low=-20, high=-6.5)
     right_wall = np.random.uniform(low=20, high=6.5)
     top_wall = np.random.uniform(low=20, high=6.5)
@@ -84,41 +83,63 @@ def generate_sample(args: argparse.Namespace,
     corners = np.array([[left_wall, bottom_wall], [left_wall, top_wall],
                         [right_wall, top_wall], [right_wall, bottom_wall]]).T
     absorption = np.random.uniform(low=0.1, high=0.99)
-    voice_loc = [voice_radius * np.cos(voice_theta), voice_radius * np.sin(voice_theta)]
-    bg_loc = [bg_radius * np.cos(bg_theta), bg_radius * np.sin(bg_theta)]
+
+    
+
 
     # FG
-    room = pra.Room.from_corners(corners, fs=sr, max_order=10, absorption=absorption)
-    mic_array = generate_mic_array(room=room)
-    room.add_source(voice_loc, signal=voice)
-    
-    room.image_source_model(use_libroom=True)
-    room.simulate()
-    fg_signals = room.mic_array.signals[:, :voice_length]
-    fg_target = np.clip(np.random.uniform(FG_TARGET_VOL, 0.15), 0, 1)
-    fg_signals = fg_signals * fg_target / fg_signals.max()
+    all_fg_signals = []
+    voice_positions = []
+    for voice_idx in range(num_voices):
+        room = pra.Room.from_corners(corners, fs=sr, max_order=10, absorption=absorption)
+        mic_array = generate_mic_array(room=room)
+
+        voice_radius = np.random.uniform(low=1.0, high=5.0)
+        voice_theta = np.random.uniform(low=0, high=2*np.pi)
+        voice_loc = [voice_radius * np.cos(voice_theta), voice_radius * np.sin(voice_theta)]
+        voice_positions.append(voice_loc)
+        room.add_source(voice_loc, signal=voices_data[voice_idx])
+
+        room.image_source_model(use_libroom=True)
+        room.simulate()
+        fg_signals = room.mic_array.signals[:, :max_voice_length]
+        fg_target = np.clip(np.random.uniform(FG_TARGET_VOL, 0.15), 0, 1)
+        fg_signals = fg_signals * fg_target / fg_signals.max()
+        all_fg_signals.append(fg_signals)
+
 
     # BG
+    bg_radius = np.random.uniform(low=2.0, high=6.0)
+    bg_theta = np.random.uniform(low=0, high=2*np.pi)
+    bg_loc = [bg_radius * np.cos(bg_theta), bg_radius * np.sin(bg_theta)]
+
     room = pra.Room.from_corners(corners, fs=sr, max_order=10, absorption=absorption)
     mic_array = generate_mic_array(room=room)
     room.add_source(bg_loc, signal=sample_bg)
     
     room.image_source_model(use_libroom=True)
     room.simulate()
-    bg_signals = room.mic_array.signals[:, :voice_length]
+    bg_signals = room.mic_array.signals[:, :max_voice_length]
     bg_target = np.clip(np.random.uniform(BG_TARGET_VOL, 0.2), 0, 1)
     bg_signals = bg_signals * bg_target / bg_signals.max()
 
+
+    # Save
     total_samples = int(args.duration * sr)
-
     for mic_idx in range(N_MICS):
-        fg_buffer = np.pad(fg_signals[mic_idx], (0, total_samples))[:total_samples]
-        bg_buffer = np.pad(bg_signals[mic_idx], (0, total_samples))[:total_samples]
-
         output_prefix = str(Path(output_prefix_dir) / "mic{:02d}_".format(mic_idx))
-        sf.write(output_prefix + "source00_gt.wav", fg_buffer, sr)
-        sf.write(output_prefix + "source01_gt.wav", bg_buffer, sr)
-        sf.write(output_prefix + "mixed.wav", bg_buffer + fg_buffer, sr)
+
+        # Save FG
+        all_fg_buffer = np.zeros((total_samples))
+        for voice_idx in range(num_voices):
+            curr_fg_buffer = np.pad(all_fg_signals[voice_idx][mic_idx], (0, total_samples))[:total_samples]
+            sf.write(output_prefix + "voice{:02d}.wav".format(voice_idx), curr_fg_buffer, sr)
+            all_fg_buffer += curr_fg_buffer
+
+        bg_buffer = np.pad(bg_signals[mic_idx], (0, total_samples))[:total_samples]
+        sf.write(output_prefix + "bg.wav", bg_buffer, sr)
+
+        sf.write(output_prefix + "mixed.wav", all_fg_buffer + bg_buffer, sr)
 
     # fig, ax = room.plot()
     # ax.set_xlim([-30, 30])
@@ -128,16 +149,17 @@ def generate_sample(args: argparse.Namespace,
 
     # [6]
     metadata = {}
-    metadata['voice'] = {
-        'position': voice_loc
-    }
+    for voice_idx in range(num_voices):
+        metadata['voice{:02d}'.format(voice_idx)] = {
+            'position': voice_positions[voice_idx]
+        }
     metadata['bg'] = {
         'position': bg_loc
     }
+
     metadata_file = str(Path(output_prefix_dir) / "metadata.json")
     with open(metadata_file, "w") as f:
         json.dump(metadata, f, indent=4)
-
 
 def main(args: argparse.Namespace):
     np.random.seed(args.seed)

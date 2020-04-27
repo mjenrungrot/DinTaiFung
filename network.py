@@ -3,6 +3,8 @@ from typing import Tuple, Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+from scipy.ndimage import gaussian_filter1d
 
 def rescale_conv(conv, reference):
     """
@@ -79,7 +81,8 @@ class Demucs(nn.Module):
                  growth: float = 2.0,
                  lstm_layers: int = 2,
                  rescale: float = 0.1,
-                 upsample: bool = False): # pylint: disable=redefined-outer-name
+                 upsample: bool = False,
+                 location_shifts=12): # pylint: disable=redefined-outer-name
         super().__init__()
         self.sources = sources
         self.n_audio_channels = n_audio_channels
@@ -92,6 +95,7 @@ class Demucs(nn.Module):
         self.lstm_layers = lstm_layers
         self.rescale = rescale
         self.upsample = upsample
+        self.location_shifts = location_shifts
 
         self.encoder = nn.ModuleList() # Source encoder
         self.decoder = nn.ModuleList() # Audio output decoder
@@ -106,7 +110,7 @@ class Demucs(nn.Module):
         activation = nn.GLU(dim=1)
 
         in_channels = n_audio_channels          # Number of input channels
-        in_loc_channels = 3                     # Number of input location channels
+        in_loc_channels = 3 # Number of input location channels
 
         # Wave U-Net structure
         for index in range(depth):
@@ -151,6 +155,7 @@ class Demucs(nn.Module):
         self.lstm = nn.LSTM(bidirectional=True, num_layers=lstm_layers, hidden_size=channels, input_size=channels)
         self.lstm_linear = nn.Linear(2*channels, channels)
         self.loc_prediction = nn.Linear(2*channels, 3)
+        # self.loc_prediction = nn.Linear(18 * 2048, 2*self.location_shifts + 1)
 
         rescale_module(self, reference=rescale)
 
@@ -176,6 +181,8 @@ class Demucs(nn.Module):
             saved.append(x)
             if self.upsample:
                 x = downsample(x, self.stride)
+
+        # locs = self.loc_prediction(x.view(x.size(0), -1))
 
         # Bi-directional LSTM at the bottleneck layer
         x = x.permute(2, 0, 1) # prep input for LSTM
@@ -206,6 +213,8 @@ class Demucs(nn.Module):
         # Reformat the output
         x = x.view(x.size(0), self.sources, self.n_audio_channels, x.size(-1))
         locs = locs.view(locs.size(0), self.sources, 3, locs.size(-1))
+        # locs = locs.view(locs.size(0), 2 * self.location_shifts+1, locs.size(-1))
+        # locs = locs[:, :, 0]
         return x, locs
 
     def loss(self,
@@ -269,6 +278,21 @@ class Demucs(nn.Module):
 
         return reconstruction_voices_loss, info
 
+    def shift_pred_loss(self, pred_locs, gt_locs):
+        # gt_locs = gt_locs.detach().cpu().numpy()
+        # gt_locs_smoothed = gaussian_filter1d(gt_locs, sigma=3, axis=1)
+        # gt_locs_smoothed = torch.Tensor(gt_locs_smoothed).cuda()
+        loss_val = F.cross_entropy(pred_locs, torch.argmax(gt_locs, 1) , reduction='elementwise_mean')
+        # shift_pred_loss = F.binary_cross_entropy_with_logits(pred_locs, gt_locs_smoothed)
+
+        print("GT: {} Pred: {}".format(np.argmax(gt_locs.detach().cpu().numpy(), axis=1),
+            np.argmax(pred_locs.detach().cpu().numpy(), axis=1)))
+        # info = {
+        #     'shift_pred_loss': shift_pred_loss,
+        # }
+
+        # return shift_pred_loss, info
+        return loss_val, None
 
     def valid_length(self, length: int) -> int: # pylint: disable=redefined-outer-name
         """

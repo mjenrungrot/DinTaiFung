@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import torch.utils.tensorboard as tensorboard
+# import torch.utils.tensorboard as tensorboard
 
 import soundfile as sf
 
@@ -25,7 +25,7 @@ def train_epoch(model: nn.Module,
                 epoch: int,
                 log_interval: int = 20,
                 data_parallel: bool = False,
-                writer: Optional[tensorboard.writer.SummaryWriter] = None) -> float:
+                writer = None) -> float:
     """
     Train a single epoch.
     """
@@ -111,7 +111,7 @@ def test_epoch(model: nn.Module,
                epoch: int,
                log_interval: int = 20,
                data_parallel: bool = False,
-               writer: Optional[tensorboard.writer.SummaryWriter] = None) -> float:
+               writer = None) -> float:
     """
     Evaluate the network.
     """
@@ -151,27 +151,28 @@ def test_epoch(model: nn.Module,
                 loss, info = model.module.voice_loss(output_voices, label_voice_signals)
             else:
                 loss, info = model.voice_loss(output_voices, label_voice_signals)
+            
 
             test_loss += loss
             voice_losses.append(info['reconstruction_voices_loss'].item())
 
             if batch_idx % log_interval == 0:
                 print("Loss: {}".format(loss))
-                if writer:
-                    for data_id in range(min(2, data.size(0))): # Output only maximum 2 audios
-                        for mic_id in range(data.size(1)):
-                            writer.add_audio("{}_input_{}".format(data_id, mic_id), data[data_id, mic_id, :], epoch, sample_rate=args.sr)
-                            writer.add_audio("{}_gt_{}".format(data_id, mic_id), label_voice_signals[data_id, 0, mic_id, :], epoch, sample_rate=args.sr)
-                            writer.add_audio("{}_pred_{}".format(data_id, mic_id), output_voices[data_id, 0, mic_id, :], epoch, sample_rate=args.sr)
+                # if writer:
+                #     for data_id in range(min(2, data.size(0))): # Output only maximum 2 audios
+                #         for mic_id in range(data.size(1)):
+                #             writer.add_audio("{}_input_{}".format(data_id, mic_id), data[data_id, mic_id, :], epoch, sample_rate=args.sr)
+                #             writer.add_audio("{}_gt_{}".format(data_id, mic_id), label_voice_signals[data_id, 0, mic_id, :], epoch, sample_rate=args.sr)
+                #             writer.add_audio("{}_pred_{}".format(data_id, mic_id), output_voices[data_id, 0, mic_id, :], epoch, sample_rate=args.sr)
 
         test_loss /= len(test_loader)
         print("\nTest set: Average Loss: {:.4f}\n".format(test_loss))
 
         # Write loss to the Tensorboard
-        if writer:
-            writer.add_scalar('Loss/test', test_loss, epoch)
-            writer.add_scalar('Loss_voice/test', np.mean(voice_losses), epoch)
-            writer.flush()
+        # if writer:
+        #     writer.add_scalar('Loss/test', test_loss, epoch)
+        #     writer.add_scalar('Loss_voice/test', np.mean(voice_losses), epoch)
+        #     writer.flush()
 
         return test_loss
 
@@ -181,14 +182,10 @@ def train(args: argparse.Namespace):
     """
     # Load dataset
     device = torch.device('cuda:0')
-    data_train = SpatialAudioDatasetWaveform(args.train_dir, n_sources=1, n_backgrounds=1, sr=args.sr)
-    
-    # data_test = SpatialAudioDatasetWaveform(args.test_dir, n_sources=1, n_backgrounds=1, sr=args.sr)
-    
-    fg_file = '/projects/grail/vjayaram/DinTaiFung/dataset_generators/harry_potter_10min_16b.wav'
-    bg_file = '/projects/grail/vjayaram/DinTaiFung/dataset_generators/background_5min_16b.wav' 
-    data_test = RealDataset(fg_file, bg_file, sr=args.sr)
-
+    data_train = SpatialAudioDatasetWaveform(args.train_dir, n_sources=1, n_backgrounds=1,
+                                             sr=args.sr, target_fg_std=None, target_bg_std=None, perturb_prob=1.0)
+    data_test = SpatialAudioDatasetWaveform(args.test_dir, n_sources=1, n_backgrounds=1,
+                                            sr=args.sr, target_fg_std=None, target_bg_std=None)
 
     # Set up the device and workers.
     use_cuda = args.use_cuda and torch.cuda.is_available()
@@ -218,8 +215,8 @@ def train(args: argparse.Namespace):
 
     # Set up checkpoints
     save_prefix = args.name
-    if not os.path.exists(args.checkpoints_dir):
-        os.makedirs(args.checkpoints_dir)
+    if not os.path.exists(os.path.join(args.checkpoints_dir, args.name)):
+        os.makedirs(os.path.join(args.checkpoints_dir, args.name))
 
     # Set up the optimizer
     optimizer = optim.Adam(model.parameters(),
@@ -228,14 +225,8 @@ def train(args: argparse.Namespace):
 
     # Load pretrain
     if args.pretrain:
-        pretrain_state_dict = torch.load("checkpoints/2_mics_real_restarted_15.pt")
-        load_pretrain(model, pretrain_state_dict)
-        # checkpoint_path = Path(args.checkpoints_dir) / "shifted_input_nchannels_167.pt"
-        # state_dict = torch.load(checkpoint_path)
-        # if isinstance(model, torch.nn.DataParallel):
-        #     model.module.load_state_dict(state_dict)
-        # else:
-        #     model.load_state_dict(state_dict)
+        #model.load_state_dict(torch.load("checkpoints/2_mics_varying_voice_angle/2_mics_varying_voice_angle_200.pt"))
+        model.load_state_dict(torch.load("checkpoints/shifted_input_nchannels/shifted_input_nchannels_167.pt"))
 
     # Load the model if `args.start_epoch` is greater than 0. This will load the model from
     # epoch = `args.start_epoch - 1`
@@ -279,9 +270,9 @@ def train(args: argparse.Namespace):
             train_losses.append((epoch, train_loss))
             test_losses.append((epoch, test_loss))
             if args.multiple_GPUs:
-                torch.save(model.module.state_dict(), os.path.join(args.checkpoints_dir, "{}_{}.pt".format(save_prefix, epoch)))
+                torch.save(model.module.state_dict(), os.path.join(args.checkpoints_dir, args.name, "{}_{}.pt".format(save_prefix, epoch)))
             else:
-                torch.save(model.state_dict(), os.path.join(args.checkpoints_dir, "{}_{}.pt".format(save_prefix, epoch)))
+                torch.save(model.state_dict(), os.path.join(args.checkpoints_dir, args.name, "{}_{}.pt".format(save_prefix, epoch)))
     except KeyboardInterrupt:
         print("Interrupted")
     except Exception as _: # pylint: disable=broad-except

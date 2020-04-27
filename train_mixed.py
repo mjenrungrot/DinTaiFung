@@ -13,7 +13,7 @@ import torch.nn.functional as F
 
 import soundfile as sf
 
-from data import SpatialAudioDatasetWaveform, RealDataset
+from data import SpatialAudioDatasetWaveform, RealDataset, MixedDataset
 from network import Demucs, center_trim, left_trim, load_pretrain # pylint: disable=unused-import
 
 SAMPLING_RATE = 32000
@@ -182,8 +182,8 @@ def train(args: argparse.Namespace):
     Train the network.
     """
     # Load dataset
-    data_train = RealDataset(args.train_dir, sr=args.sr, num_elements=10000, perturb_prob=1.0)
-    data_test = RealDataset(args.test_dir, sr=args.sr, num_elements=400)
+    data_train = MixedDataset(args.train_dir_synth, args.train_dir_real, sr=args.sr, num_elements_real=10000, perturb_prob=1.0)
+    data_test = MixedDataset(args.test_dir_synth, args.test_dir_real, sr=args.sr, num_elements_real=1000, perturb_prob=0.0)
     device = torch.device('cuda:0')
 
     # Set up the device and workers.
@@ -287,8 +287,10 @@ def train(args: argparse.Namespace):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('train_dir', type=str, help="Path to the training dataset")
-    parser.add_argument('test_dir', type=str, help="Path to the testing dataset")
+    parser.add_argument('train_dir_synth', type=str, help="Path to the synthetic training dataset")
+    parser.add_argument('test_dir_synth', type=str, help="Path to the testing dataset")
+    parser.add_argument('train_dir_real', type=str, help="Path to the real training dataset")
+    parser.add_argument('test_dir_real', type=str, help="Path to the real testing dataset")
     parser.add_argument('--name', type=str, default="DinTaiFung", help="Name of the experiment")
     parser.add_argument('--log_dir', type=str, default='./logs', help="Path to the log directory")
     parser.add_argument('--batch_size', type=int, default=16, help="Batch size")
