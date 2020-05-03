@@ -110,12 +110,21 @@ class Demucs(nn.Module):
 
         # Wave U-Net structure
         for index in range(depth):
-            encode = []
-            encode += [nn.Conv1d(in_channels, channels, kernel_size, stride), nn.ReLU()]
-            encode += [nn.Conv1d(channels, 2 * channels, 1), activation]
-            self.encoder.append(nn.Sequential(*encode))
+            encode = nn.ModuleDict()
+            encode["conv1"] = nn.Conv1d(in_channels, channels, kernel_size, stride)
+            encode["relu"] =  nn.ReLU()
 
-            decode = []
+            encode["conv2"] = nn.Conv1d(channels, 2 * channels, 1)
+            encode["activation"] = activation
+
+            #encode["gc_embed"] = nn.Conv1d(5, channels, 1)
+            #encode["gc_embed2"] = nn.Conv1d(5, 2 * channels, 1)
+            encode["gc_embed"] = nn.Linear(5, channels)
+            #encode["gc_embed2"] = nn.Linear(5, 2 * channels)
+
+            self.encoder.append(encode)
+
+            decode = nn.ModuleDict()
             if index > 0:
                 out_channels = in_channels
             else:
@@ -124,16 +133,24 @@ class Demucs(nn.Module):
                 else:
                     out_channels = sources * n_audio_channels
 
-            decode += [nn.Conv1d(channels, 2 * channels, context), activation]
+            # decode += [nn.Conv1d(channels, 2 * channels, context), activation]
 
-            if upsample:
-                decode += [nn.Conv1d(channels, out_channels, kernel_size, stride=1)]
-            else:
-                decode += [nn.ConvTranspose1d(channels, out_channels, kernel_size, stride)]
+            # if upsample:
+            #     decode += [nn.Conv1d(channels, out_channels, kernel_size, stride=1)]
+            # else:
+            #     decode += [nn.ConvTranspose1d(channels, out_channels, kernel_size, stride)]
+            decode["conv1"] = nn.Conv1d(channels, 2 * channels, context)
+            decode["activation"] = activation
+            decode["convtransposed"] = nn.ConvTranspose1d(channels, out_channels, kernel_size, stride)
+
+            # decode["gc_embed"] = nn.Conv1d(5, 2 * channels, 1)
+            # decode["gc_embed2"] = nn.Conv1d(5, out_channels, 1)
+            decode["gc_embed"] = nn.Linear(5, 2 * channels)
+            decode["gc_embed2"] = nn.Linear(5, out_channels)
 
             if index > 0:
-                decode.append(nn.ReLU())
-            self.decoder.insert(0, nn.Sequential(*decode))
+                decode["relu"] = nn.ReLU()
+            self.decoder.insert(0, decode)  # Put it at the front, reverse order
 
             in_channels = channels
             channels = int(growth * channels)
@@ -163,7 +180,14 @@ class Demucs(nn.Module):
 
         # Encoder
         for encode in self.encoder:
-            x = encode(x)
+            x = encode["conv1"](x)  # Conv 1d
+            embedding = encode["gc_embed"](angle_conditioning).unsqueeze(2)
+            x = encode["relu"](x + embedding)
+            x = encode["conv2"](x)
+            #embedding2 = encode["gc_embed2"](angle_conditioning).unsqueeze(2)
+            x = encode["activation"](x)
+
+
             saved.append(x)
             if self.upsample:
                 x = downsample(x, self.stride)
@@ -178,11 +202,26 @@ class Demucs(nn.Module):
 
         # Source decoder
         for decode in self.decoder:
-            if self.upsample:
-                x = upsample(x, stride=self.stride)
+            # if self.upsample:
+            #     x = upsample(x, stride=self.stride)
             skip = center_trim(saved.pop(-1), x)
             x = x + skip
-            x = decode(x)
+
+            # x = decode["conv1"](x)
+            # embedding = decode["gc_embed"](angle_conditioning).unsqueeze(2)
+            # x = decode["activation"](x + embedding)
+            # x = decode["convtransposed"](x)
+            # embedding2 = decode["gc_embed2"](angle_conditioning).unsqueeze(2)
+            # if "relu" in decode:
+            #     x = decode["relu"](x + embedding2)
+
+            x = decode["conv1"](x)
+            #embedding = decode["gc_embed"](angle_conditioning).unsqueeze(2)
+            x = decode["activation"](x)
+            x = decode["convtransposed"](x)
+            #embedding2 = decode["gc_embed2"](angle_conditioning).unsqueeze(2)
+            if "relu" in decode:
+                x = decode["relu"](x)
 
 
         if self.final:
