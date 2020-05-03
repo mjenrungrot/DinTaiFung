@@ -81,8 +81,7 @@ class Demucs(nn.Module):
                  growth: float = 2.0,
                  lstm_layers: int = 2,
                  rescale: float = 0.1,
-                 upsample: bool = False,
-                 location_shifts=12): # pylint: disable=redefined-outer-name
+                 upsample: bool = False): # pylint: disable=redefined-outer-name
         super().__init__()
         self.sources = sources
         self.n_audio_channels = n_audio_channels
@@ -95,11 +94,9 @@ class Demucs(nn.Module):
         self.lstm_layers = lstm_layers
         self.rescale = rescale
         self.upsample = upsample
-        self.location_shifts = location_shifts
 
         self.encoder = nn.ModuleList() # Source encoder
         self.decoder = nn.ModuleList() # Audio output decoder
-        self.loc_decoder = nn.ModuleList() # Location decoder
 
         self.final = None
 
@@ -110,7 +107,6 @@ class Demucs(nn.Module):
         activation = nn.GLU(dim=1)
 
         in_channels = n_audio_channels          # Number of input channels
-        in_loc_channels = 3 # Number of input location channels
 
         # Wave U-Net structure
         for index in range(depth):
@@ -122,13 +118,11 @@ class Demucs(nn.Module):
             decode = []
             if index > 0:
                 out_channels = in_channels
-                out_loc_channels = 3
             else:
                 if upsample:
                     out_channels = channels
                 else:
                     out_channels = sources * n_audio_channels
-                    out_loc_channels = sources * 3
 
             decode += [nn.Conv1d(channels, 2 * channels, context), activation]
 
@@ -141,12 +135,6 @@ class Demucs(nn.Module):
                 decode.append(nn.ReLU())
             self.decoder.insert(0, nn.Sequential(*decode))
 
-            loc_decoder = []
-            loc_decoder += [nn.ConvTranspose1d(in_loc_channels, out_loc_channels, kernel_size, stride)]
-            if index > 0:
-                loc_decoder.append(nn.ReLU())
-            self.loc_decoder.insert(0, nn.Sequential(*loc_decoder))
-
             in_channels = channels
             channels = int(growth * channels)
 
@@ -154,12 +142,10 @@ class Demucs(nn.Module):
         channels = in_channels
         self.lstm = nn.LSTM(bidirectional=True, num_layers=lstm_layers, hidden_size=channels, input_size=channels)
         self.lstm_linear = nn.Linear(2*channels, channels)
-        self.loc_prediction = nn.Linear(2*channels, 3)
-        # self.loc_prediction = nn.Linear(18 * 2048, 2*self.location_shifts + 1)
 
         rescale_module(self, reference=rescale)
 
-    def forward(self, mix: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]: # pylint: disable=arguments-differ
+    def forward(self, mix: torch.Tensor, angle_conditioning: torch.Tensor): # pylint: disable=arguments-differ
         """
         Forward pass. Note that in our current work the use of `locs` is disregarded.
 
@@ -182,14 +168,11 @@ class Demucs(nn.Module):
             if self.upsample:
                 x = downsample(x, self.stride)
 
-        # locs = self.loc_prediction(x.view(x.size(0), -1))
 
         # Bi-directional LSTM at the bottleneck layer
         x = x.permute(2, 0, 1) # prep input for LSTM
         self.lstm.flatten_parameters() # to improve memory usage.
         x = self.lstm(x)[0]
-        locs = self.loc_prediction(x) # pylint: disable=redefined-outer-name
-        locs = locs.permute(1, 2, 0)
         x = self.lstm_linear(x)
         x = x.permute(1, 2, 0)
 
@@ -201,9 +184,6 @@ class Demucs(nn.Module):
             x = x + skip
             x = decode(x)
 
-        # Location decoder
-        for loc_decode in self.loc_decoder:
-            locs = loc_decode(locs)
 
         if self.final:
             skip = center_trim(saved.pop(-1), x)
@@ -212,10 +192,8 @@ class Demucs(nn.Module):
 
         # Reformat the output
         x = x.view(x.size(0), self.sources, self.n_audio_channels, x.size(-1))
-        locs = locs.view(locs.size(0), self.sources, 3, locs.size(-1))
-        # locs = locs.view(locs.size(0), 2 * self.location_shifts+1, locs.size(-1))
-        # locs = locs[:, :, 0]
-        return x, locs
+
+        return x
 
     def loss(self,
              input_signal: torch.Tensor,

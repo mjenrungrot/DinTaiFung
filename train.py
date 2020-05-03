@@ -38,14 +38,17 @@ def train_epoch(model: nn.Module,
     voice_losses = []
     bg_losses = []
     combined_losses = []
-    for batch_idx, (data, label_voice_signals) in enumerate(train_loader):
+
+    for batch_idx, (data, label_voice_signals, _, _, angle_idx) in enumerate(train_loader):
         data = data.to(device)
         label_voice_signals = label_voice_signals.to(device)
 
-        # Normalize input
+        # Normalize input, each batch item separately
         data = (data * 2**15).round() / 2**15
-        ref = data.mean(0)
-        data = (data - ref.mean()) / ref.std()
+        ref = data.mean(1)  # Average across the n microphones
+        means = ref.mean(1).unsqueeze(1).unsqueeze(2)
+        stds = ref.std(1).unsqueeze(1).unsqueeze(2)
+        data = (data - means) / stds
 
         # Reset grad
         optimizer.zero_grad()
@@ -58,12 +61,12 @@ def train_epoch(model: nn.Module,
         delta = valid_length - data.shape[-1]
         padded = F.pad(data, (delta // 2, delta - delta // 2))
 
-        output_signal, output_locs = model(padded)
+        output_signal = model(padded)
         output_signal = center_trim(output_signal, data)
-        output_locs = center_trim(output_locs, data)
+
 
         # Un-normalize
-        output_signal = output_signal * ref.std() + ref.mean()
+        output_signal = output_signal * stds.unsqueeze(3) + means.unsqueeze(3)
         output_voices = output_signal[:, 0:1]
 
         if data_parallel:
@@ -122,14 +125,16 @@ def test_epoch(model: nn.Module,
     bg_losses = []
     combined_losses = []
     with torch.no_grad():
-        for batch_idx, (data, label_voice_signals) in enumerate(test_loader):
+        for batch_idx, (data, label_voice_signals, _, _) in enumerate(test_loader):
             data = data.to(device)
             label_voice_signals = label_voice_signals.to(device)
 
-            # Normalize input
-            transformed_data = (data * 2**15).round() / 2**15
-            ref = transformed_data.mean(0)
-            transformed_data = (transformed_data - ref.mean()) / ref.std()
+            # Normalize input, each batch item separately
+            data = (data * 2**15).round() / 2**15
+            ref = data.mean(1)  # Average across the n microphones
+            means = ref.mean(1).unsqueeze(1).unsqueeze(2)
+            stds = ref.std(1).unsqueeze(1).unsqueeze(2)
+            transformed_data = (data - means) / stds
 
             # Run through the model
             if data_parallel:
@@ -139,12 +144,11 @@ def test_epoch(model: nn.Module,
             delta = valid_length - transformed_data.shape[-1]
             padded = F.pad(transformed_data, (delta // 2, delta - delta // 2))
 
-            output_signal, output_locs = model(padded)
+            output_signal= model(padded)
             output_signal = center_trim(output_signal, transformed_data)
-            output_locs = center_trim(output_locs, transformed_data)
 
             # Un-normalize
-            output_signal = output_signal * ref.std() + ref.mean()
+            output_signal = output_signal * stds.unsqueeze(3) + means.unsqueeze(3)
             output_voices = output_signal[:, 0:1]
 
             if data_parallel:
@@ -183,9 +187,11 @@ def train(args: argparse.Namespace):
     # Load dataset
     device = torch.device('cuda:0')
     data_train = SpatialAudioDatasetWaveform(args.train_dir, n_sources=1, n_backgrounds=1,
-                                             sr=args.sr, target_fg_std=None, target_bg_std=None, perturb_prob=1.0)
+                                             sr=args.sr, target_fg_std=None, target_bg_std=None, perturb_prob=1.0,
+                                             angular_specificity_idx=args.angle_idx)
     data_test = SpatialAudioDatasetWaveform(args.test_dir, n_sources=1, n_backgrounds=1,
-                                            sr=args.sr, target_fg_std=None, target_bg_std=None)
+                                            sr=args.sr, target_fg_std=None, target_bg_std=None,
+                                            angular_specificity_idx=args.angle_idx)
 
     # Set up the device and workers.
     use_cuda = args.use_cuda and torch.cuda.is_available()
@@ -226,8 +232,8 @@ def train(args: argparse.Namespace):
     # Load pretrain
     if args.pretrain:
         #model.load_state_dict(torch.load("checkpoints/2_mics_varying_voice_angle/2_mics_varying_voice_angle_200.pt"))
-        model.load_state_dict(torch.load("checkpoints/shifted_input_nchannels/shifted_input_nchannels_167.pt"))
-
+        #model.load_state_dict(torch.load("checkpoints/shifted_input_nchannels/shifted_input_nchannels_167.pt"))
+        model.load_state_dict(torch.load('checkpoints/22degrees_6mics/22degrees_6mics_39.pt'), strict=False)
     # Load the model if `args.start_epoch` is greater than 0. This will load the model from
     # epoch = `args.start_epoch - 1`
     if args.start_epoch is not None:
@@ -303,6 +309,7 @@ if __name__ == '__main__':
     parser.add_argument('--tensorboard', dest='tensorboard', action='store_true', help="Whether to use tensorboard")
     parser.add_argument('--multiple_GPUs', dest='multiple_GPUs', action='store_true', help="Whether to use multiple GPUs")
     parser.add_argument('--device_ids', default=[], nargs='+', help="IDs for multiple GPUs")
+    parser.add_argument('--angle_idx', default=0, type=int, help="See data.py for details")
     print(parser.parse_args())
     train(parser.parse_args())
 
