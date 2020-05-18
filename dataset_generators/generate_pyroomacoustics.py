@@ -22,7 +22,7 @@ import soundfile as sf
 
 N_MICS = 6
 FG_TARGET_VOL = 0.4
-BG_TARGET_VOL = 0.5
+BG_TARGET_VOL = 0.4
 
 def generate_mic_array(room, radius: float = 0.145 / 2, n_mics: int = N_MICS):
     """
@@ -57,20 +57,18 @@ def generate_sample(args: argparse.Namespace,
     output_prefix_dir = os.path.join(args.output_path, '{:05d}'.format(idx))
     Path(output_prefix_dir).mkdir(parents=True, exist_ok=True)
 
-    all_voices = Path(args.input_voice_dir).rglob('*.wav')
-    all_voices = list(all_voices)
-
     num_voices = random.randint(1, 4)  # How many voices to have present
-    print("Num voices {}".format(num_voices))
-    voice_files = random.sample(all_voices, num_voices)
+    voice_files = random.sample(args.all_voices, num_voices)
 
     voices_data = []
     for voice_file in voice_files:
+        voice_identity = int(str(voice_file).split("/")[-1].split("-")[0])
         voice, _ = librosa.core.load(voice_file, sr=sr, mono=True)
-        voices_data.append(voice)
+        voices_data.append((voice, voice_identity))
+
 
     # [2]
-    max_voice_length = max([len(voice) for voice in voices_data])
+    max_voice_length = max([len(voice[0]) for voice in voices_data])
     bg_length = len(bg)
     bg_start_idx = np.random.randint(bg_length - max_voice_length) # [0, bg_length - voice_length)
     sample_bg = bg[bg_start_idx: bg_start_idx + max_voice_length]
@@ -98,7 +96,7 @@ def generate_sample(args: argparse.Namespace,
         voice_theta = np.random.uniform(low=0, high=2*np.pi)
         voice_loc = [voice_radius * np.cos(voice_theta), voice_radius * np.sin(voice_theta)]
         voice_positions.append(voice_loc)
-        room.add_source(voice_loc, signal=voices_data[voice_idx])
+        room.add_source(voice_loc, signal=voices_data[voice_idx][0])
 
         room.image_source_model(use_libroom=True)
         room.simulate()
@@ -151,7 +149,8 @@ def generate_sample(args: argparse.Namespace,
     metadata = {}
     for voice_idx in range(num_voices):
         metadata['voice{:02d}'.format(voice_idx)] = {
-            'position': voice_positions[voice_idx]
+            'position': voice_positions[voice_idx],
+            'speaker_id': voices_data[voice_idx][1]
         }
     metadata['bg'] = {
         'position': bg_loc
@@ -161,9 +160,13 @@ def generate_sample(args: argparse.Namespace,
     with open(metadata_file, "w") as f:
         json.dump(metadata, f, indent=4)
 
+
 def main(args: argparse.Namespace):
     np.random.seed(args.seed)
     base_background, _ = librosa.core.load(args.input_background_path, sr=args.sr, mono=True)
+
+    all_voices = Path(args.input_voice_dir).rglob('*.flac')
+    args.all_voices = list(all_voices)
 
     pbar = tqdm.tqdm(total=args.n_outputs)
     pool = mp.Pool(args.n_workers)

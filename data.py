@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import time
 
 from typing import Tuple, Optional
 from pathlib import Path
@@ -16,6 +17,13 @@ from scipy.io import wavfile
 
 GLOBAL_SAMPLE_RATE: int = 44100
 SPEED_OF_SOUND = 343.0  # m/s
+
+def to_categorical(index: int, num_classes: int):
+    data = np.zeros((num_classes))
+    data[index] = 1
+
+    return data
+
 
 def read_file(filename, sample_rate: Optional[int] = None, trim: bool = False) -> Tuple[np.ndarray, int]:
     """
@@ -33,6 +41,27 @@ def read_file(filename, sample_rate: Optional[int] = None, trim: bool = False) -
     if trim and len(signal) > 1:
         signal = librosa.effects.trim(signal, top_db=40)[0]
     return signal, file_sr
+
+def shift_input(sr, input_data, input_position):
+    """
+    Shifts the input according to the voice position. This tried to
+    line up the voice samples in the time domain
+    """
+    radius = 0.145 / 2
+    num_channels = input_data.shape[0]
+    mic_array = [[radius * np.cos(2 * np.pi / num_channels * i), radius * np.sin(2 * np.pi / num_channels * i)] for i in range(6)]
+
+    distance0 = np.linalg.norm(mic_array[0] - input_position)
+    shifts = [0]
+    for channel_idx in range(1, num_channels):
+        distance = np.linalg.norm(mic_array[channel_idx] - input_position)
+        distance_diff = distance - distance0
+        shift_time = distance_diff / SPEED_OF_SOUND
+        shift_samples = int(round(sr * shift_time))
+        input_data[channel_idx] = np.roll(input_data[channel_idx], -shift_samples)
+        shifts.append(shift_samples)
+
+    return input_data, shifts
 
 
 def check_valid_dir(dir, requires_n_voices=1):
@@ -79,7 +108,11 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
                  requires_n_voices=1):
         super().__init__()
         all_dirs = sorted(list(Path(input_path).glob('[0-9]*')))
-        self.dirs = [x for x in all_dirs if check_valid_dir(x, requires_n_voices)]
+
+        if requires_n_voices > 1:
+            self.dirs = [x for x in all_dirs if check_valid_dir(x, requires_n_voices)]
+        else:
+            self.dirs = all_dirs
 
         self.n_sources = n_sources
         self.n_backgrounds = n_backgrounds
@@ -95,17 +128,34 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
         return len(self.dirs)  # Two different ground truth speakers
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if self.angular_specificity_idx = -1:
+        if self.angular_specificity_idx == -1:
+            #p = [0.1, 0.1, 0.15, 0.25, 0.4]
+            #p = [0.2, 0.2, 0.2, 0.2, 0.2]
             curr_angular_specificity_idx = np.random.randint(0, 5)
         else:
             curr_angular_specificity_idx = self.angular_specificity_idx
+
+        # ALL_ANGULAR_SPECIFICITY = [np.pi / 2,  # 90 degrees
+        #                            np.pi / 4,  # 45 degrees
+        #                            np.pi / 8,  # 22.5 degrees
+        #                            np.pi / 16,  # 11.25 degrees
+        #                            np.pi / 32,  # 5.625 degrees
+        #                            ]
 
         ALL_ANGULAR_SPECIFICITY = [np.pi / 2,  # 90 degrees
                                    np.pi / 4,  # 45 degrees
                                    np.pi / 8,  # 22.5 degrees
                                    np.pi / 16,  # 11.25 degrees
-                                   np.pi / 32,  # 5.625 degrees
+                                   np.pi / 16,  # 5.625 degrees
                                    ]
+
+        # ALL_ANGULAR_SPECIFICITY = [np.pi / 32,  # 90 degrees
+        #                            np.pi / 32,  # 45 degrees
+        #                            np.pi / 32,  # 22.5 degrees
+        #                            np.pi / 32,  # 11.25 degrees
+        #                            np.pi / 32,  # 5.625 degrees
+        #                            ]
+
         curr_angular_specificity = ALL_ANGULAR_SPECIFICITY[curr_angular_specificity_idx]
         #STARTING_ANGLES = np.array([-3, -1, 1, 3]) * np.pi / 4  # Middle of each quadrant
         #STARTING_ANGLES = np.array([-7, -5, -3, -1, 1, 3, 5, 7]) * np.pi / 8  # Middle of each quadrant
@@ -121,6 +171,7 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
         with open(Path(curr_dir) / 'metadata.json') as json_file:
             json_data = json.load(json_file)
 
+        #num_voices = 2
         num_voices = len(json_data) - 1
 
         # target_voice = random.randint(0, num_voices - 1)
@@ -128,19 +179,40 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
         #locs_voice = json_data[target_voice_key]['position']
         #locs_voice = torch.tensor(locs_voice)
 
-        mic_files = sorted(list(Path(curr_dir).rglob('*mixed.wav')))
         random_perturb = RandomAudioPerturbation()
 
         # All voice signals
         keys = ["voice{:02}".format(i) for i in range(num_voices)]
-        # keys.append("bg")
 
-        # Either use a random slice or get one with a voice 
-        random_probability = 1. / (2**(curr_angular_specificity_idx + 1))
+        # Train with both positives and negatives
+        #negative_probabilities = [0.2, 0.2, 0.2, 0.2, 0.2]
+        negative_probabilities = [0., 0., 0., 0., 0.]
+        #random_probability = 1. / (1.1**(curr_angular_specificity_idx + 1))
+        random_probability = negative_probabilities[curr_angular_specificity_idx]
         if np.random.uniform() < random_probability:
-            target_angle = np.random.choice(starting_angles)
+            random_key = random.choice(keys)
+            voice_pos = json_data[random_key]["position"]
+            voice_pos = np.array(voice_pos)
+            voice_angle = np.arctan2(voice_pos[1], voice_pos[0])
+            angle_idx = (np.abs(starting_angles - voice_angle)).argmin()
+
+            # Non uniform distribution to prefer closer points
+            p = np.zeros_like(starting_angles)
+            for i in range(p.shape[0]):
+                if i == angle_idx:
+                    p[i] = 0
+                
+                else:
+                    dist = min(abs(i - angle_idx), (len(starting_angles) - angle_idx + i))
+                    p[i] = 1 / (dist)
+
+            p /= p.sum()
+
+            target_angle = np.random.choice(starting_angles, p=p)
             random_pos = np.array([RADIUS * np.cos(target_angle), RADIUS * np.sin(target_angle)])
             target_pos = random_pos
+
+
         else:
             random_key = random.choice(keys)
             voice_pos = json_data[random_key]["position"]
@@ -156,6 +228,11 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
         all_sources = []
         target_voice_data = []
         voice_positions = []
+
+        # Only add the bg sometimes
+        if np.random.uniform() < 0.7:
+            keys.append("bg")
+
         for key in keys:
             gt_audio_files = sorted(list(Path(curr_dir).rglob("*" + key + ".wav")))
             assert(len(gt_audio_files) > 0)
@@ -165,16 +242,16 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
                 gt_waveform, _ = librosa.core.load(gt_audio_file, self.sr, mono=True)
 
                 # Normalize volume
-                if "bg" not in key:
-                    if self.target_fg_std is not None:
-                        gt_waveform = gt_waveform / ((gt_waveform.std() + 1e-4) / self.target_fg_std)
-                        random_fg_volume = np.random.uniform(0.5, 4.0)
-                        gt_waveform *= random_fg_volume
-                else:
-                    if self.target_bg_std is not None:
-                        gt_waveform = gt_waveform / ((gt_waveform.std() + 1e-4) / self.target_bg_std)
-                        random_bg_volume = np.random.uniform(0.1, 1.5)
-                        gt_waveform *= random_bg_volume
+                # if "bg" not in key:
+                #     if self.target_fg_std is not None:
+                #         gt_waveform = gt_waveform / ((gt_waveform.std() + 1e-4) / self.target_fg_std)
+                #         random_fg_volume = np.random.uniform(0.5, 4.0)
+                #         gt_waveform *= random_fg_volume
+                # else:
+                #     if self.target_bg_std is not None:
+                #         gt_waveform = gt_waveform / ((gt_waveform.std() + 1e-4) / self.target_bg_std)
+                #         random_bg_volume = np.random.uniform(0.1, 1.5)
+                #         gt_waveform *= random_bg_volume
 
                 gt_waveforms.append(torch.from_numpy(gt_waveform))
             
@@ -182,27 +259,33 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
             if self.dont_shift:
                 shifted_gt = torch.tensor(np.stack(gt_waveforms)).float()
             else:
-                shifted_gt, _ = self.shift_input(torch.tensor(np.stack(gt_waveforms)).float(), target_pos)
+                # shifted_gt, _ = self.shift_input(torch.tensor(np.stack(gt_waveforms)).float(), target_pos)
+                shifted_gt, _ = shift_input(self.sr, np.stack(gt_waveforms), target_pos)
 
             if np.random.uniform() < self.perturb_prob:
                 #perturbed_source = torch.tensor(random_perturb(shifted_gt[[0,3]].numpy()))  # 6 mic array going to 2 mics. Hard coded for now
-                perturbed_source = torch.tensor(random_perturb(shifted_gt.numpy()))
+                perturbed_source = torch.tensor(random_perturb(shifted_gt)).float()
             else:
                 #perturbed_source = shifted_gt[[0,3]]
-                perturbed_source = shifted_gt
+                perturbed_source = torch.tensor(shifted_gt).float()
 
             all_sources.append(perturbed_source)
 
-            locs_voice = json_data[key]['position']
-            voice_angle = np.arctan2(locs_voice[1], locs_voice[0])
-            voice_positions.append(locs_voice)
+            # Check which foregrounds are in the angle of interest
+            if "bg" not in key:
+                locs_voice = json_data[key]['position']
+                voice_angle = np.arctan2(locs_voice[1], locs_voice[0])
+                voice_positions.append(locs_voice)
 
-            # Need to save for ground truth
-            if abs(voice_angle - target_angle) < (curr_angular_specificity / 2):
-                target_voice_data.append(perturbed_source.view(1, perturbed_source.shape[0], perturbed_source.shape[1]))
-        
-            else:
-                target_voice_data.append(torch.zeros((1, perturbed_source.shape[0], perturbed_source.shape[1])))
+                # Need to save for ground truth
+                if abs(voice_angle - target_angle) < (curr_angular_specificity / 2):
+                    target_voice_data.append(perturbed_source.view(1, perturbed_source.shape[0], perturbed_source.shape[1]))
+
+                elif self.n_mics == 2 and abs(-voice_angle - target_angle) < (curr_angular_specificity / 2):
+                    target_voice_data.append(perturbed_source.view(1, perturbed_source.shape[0], perturbed_source.shape[1]))
+            
+                else:
+                    target_voice_data.append(torch.zeros((1, perturbed_source.shape[0], perturbed_source.shape[1])))
 
         all_sources = torch.stack(all_sources, dim=0)
         mixed_data = torch.sum(all_sources, dim=0)
@@ -213,19 +296,28 @@ class SpatialAudioDatasetWaveform(torch.utils.data.Dataset):
         while len(voice_positions) < 4:
             voice_positions.append([0, 0])
 
-        return (mixed_data, target_voice_data, torch.tensor(voice_positions), torch.tensor(target_pos), curr_angular_specificity_idx)
+        angular_specificity_one_hot = torch.tensor(to_categorical(curr_angular_specificity_idx, 5)).float()
+
+
 
         # if self.n_mics == 1:
         #     return (mixed_data[[0]], target_voice_data[:,[0]])
 
-        # elif self.n_mics == 2:
-        #     return (mixed_data[[0,3]], target_voice_data[:,[0,3]])
+        if self.n_mics == 2:
+            return (mixed_data[[0,3]], target_voice_data[:,[0,3]], torch.tensor(voice_positions), torch.tensor(target_pos), angular_specificity_one_hot)
 
-        # elif self.n_mics == 6:
-        #     return (mixed_data, target_voice_data)
+        elif self.n_mics == 6:
+            return (mixed_data, target_voice_data, torch.tensor(voice_positions), torch.tensor(target_pos), angular_specificity_one_hot)
+            # return (mixed_data, target_voice_data)
 
-        # else:
-        #     raise ValueError("Invalid number of mics {}".format(self.n_mics))
+        else:
+            raise ValueError("Invalid number of mics {}".format(self.n_mics))
+        
+        
+
+
+
+
 
     def shift_input(self, input_data, input_position):
         """
@@ -254,7 +346,7 @@ class RealDataset(torch.utils.data.Dataset):
     Dataset of synthetic composites of real data
     """
 
-    def __init__(self, input_dir, duration=3.0,
+    def __init__(self, input_dir, duration=6.0,
                  sr=GLOBAL_SAMPLE_RATE,
                  num_elements=1000,
                  perturb_prob=0.0,
@@ -338,7 +430,10 @@ class RealDataset(torch.utils.data.Dataset):
 
         gt = self.shift_input(torch.tensor(all_fg[0]), shift)
 
-        return (mixed_data, gt.view(1, 2, -1))
+        angle_idx = np.random.randint(0, 5)
+        angular_specificity_one_hot = torch.tensor(to_categorical(angle_idx, 5)).float()
+
+        return (mixed_data, gt.view(1, 2, -1), angular_specificity_one_hot)
 
     def shift_input(self, data, shift):
         """
@@ -381,9 +476,9 @@ class RandomAudioPerturbation(object):
     """Randomly perturb audio samples"""
 
     def __call__(self, data):
-        highshelf_gain = np.random.normal(0, 5)
-        lowshelf_gain = np.random.normal(0, 5)
-        noise_amount = np.random.uniform(0, 0.003)
+        highshelf_gain = np.random.normal(0, 2)
+        lowshelf_gain = np.random.normal(0, 2)
+        noise_amount = np.random.uniform(0, 0.001)
         shift = 0 #random.randint(-1, 1)
 
         fx = (
@@ -395,6 +490,6 @@ class RandomAudioPerturbation(object):
         for i in range(data.shape[0]):
             data[i] = fx(data[i])
             data[i] += np.random.uniform(-noise_amount, noise_amount, size=data[i].shape)
-            np.roll(data[i], shift, axis=0)
+        #     np.roll(data[i], shift, axis=0)
         return data
 

@@ -24,11 +24,19 @@ np.random.seed(123)
 random.seed(123)
 USE_CUDA = True
 
-ENERGY_CUTOFF = 0.003
+ENERGY_CUTOFF = 0.005
 #ENERGY_CUTOFF = 0.000
 NMS_RADIUS = np.pi / 4
 NMS_SIMILARITY_CUTOFF = 0.015
 #NMS_SIMILARITY_CUTOFF = 0.000
+
+TARGET_FG_STD = 0.03,
+TARGET_BG_STD = 0.04,
+
+INPUT_FG1 = "/projects/grail/audiovisual/datasets/DinTaiFung/2mics_real_vctk_recorded/test/fg/vctk_voice_test3_shift-13.wav"
+INPUT_FG2 = "/projects/grail/audiovisual/datasets/DinTaiFung/2mics_real_vctk_recorded/train/fg/vctk_voice_train4_shift17.wav"
+INPUT_BG = "/projects/grail/audiovisual/datasets/DinTaiFung/2mics_real_vctk_recorded/test/bg/background_shift0.wav"
+
 
 
 from data import check_valid_dir
@@ -120,74 +128,27 @@ def draw_outputs(candidate_angles):
         ax.add_artist(a_circle)
     plt.savefig("output.png")
 
-def get_items(curr_dir, args):
+def get_items(args):
     """
     This is a modified version of the SpatialAudioDataset DataLoader
     """
-    with open(Path(curr_dir) / 'metadata.json') as json_file:
-        json_data = json.load(json_file)
+    fg1 = librosa.core.load(INPUT_FG1, mono=False, sr=args.sr, duration=6.0)[0]
+    fg2 = librosa.core.load(INPUT_FG2, mono=False, sr=args.sr, duration=6.0)[0]
+    bg = librosa.core.load(INPUT_BG, mono=False, sr=args.sr, duration=6.0)[0]
 
-    #num_voices = min(len(json_data) - 1, 2)
-    #num_voices = len(json_data) - 1
-    num_voices = 1
+    fg1 = fg1 / (fg1.std() / TARGET_FG_STD)
+    fg2 = fg2 / (fg2.std() / TARGET_FG_STD)
+    bg = bg / (bg.std() / TARGET_BG_STD)
 
-    print("Num voices: {}".format(num_voices))
-    mic_files = sorted(list(Path(curr_dir).rglob('*mixed.wav')))
-
-    # All voice signals
-    keys = ["voice{:02}".format(i) for i in range(num_voices)]
-    keys.append("bg")
-
+    mixed_data =  fg1 + fg2 + bg
     """
     Loading the sources
     """
     # Iterate over different sources
-    all_sources = []
-    target_voice_data = []
-    voice_positions = []
-    for key in keys:
-        if "bg" not in key:
-            print("Voice pos {}".format(np.arctan2(json_data[key]["position"][1],
-                                        json_data[key]["position"][0])))
-        else:
-            print("BG pos {}".format(np.arctan2(json_data[key]["position"][1],
-                                        json_data[key]["position"][0])))
-        gt_audio_files = sorted(list(Path(curr_dir).rglob("*" + key + ".wav")))
-        assert(len(gt_audio_files) > 0)
-        gt_waveforms = []
-
-        # Iterate over different mics
-        for _, gt_audio_file in enumerate(gt_audio_files):
-            gt_waveform, _ = librosa.core.load(gt_audio_file, args.sr, mono=True)
-
-            # if "bg" in key:
-            #     gt_waveform /= 2.
-            gt_waveforms.append(gt_waveform)
-
-        single_source = np.stack(gt_waveforms)
-        all_sources.append(single_source)
-        locs_voice = np.arctan2(json_data[key]["position"][1],
-                                        json_data[key]["position"][0])
-        voice_positions.append(locs_voice)
-
-        if args.debug:
-            sf.write(os.path.join(args.writing_dir, "gt_{}.wav".format(key)), single_source[0], args.sr)
-
-    all_sources = np.stack(all_sources)  # n voices x n mics x n samples
-    mixed_data = np.sum(all_sources, axis=0)  # n mics x n samples
-
-    gt = [(voice_positions[i], all_sources[i]) for i in range(num_voices)]
-
     if args.debug:
         sf.write(os.path.join(args.writing_dir, "mixed.wav"), mixed_data[0], args.sr)
 
-
-    if args.n_channels == 2:
-        return mixed_data[[0, 3]], gt
-
-    else:
-        return mixed_data, gt
-
+    return mixed_data
 
 def angular_distance(angle1, angle2):
     d1 = abs(angle1 - angle2)
@@ -234,7 +195,7 @@ def run_separation(mixed_data, model, args, energy_cutoff, nms_cutoff):
         for target_angle, _, _ in candidate_angles:
             target_pos = np.array([RADIUS * np.cos(target_angle), RADIUS * np.sin(target_angle)])
 
-            data = shift_input(args, torch.tensor(mixed_data).to(args.device), target_pos)
+            data = shift_input(args, torch.tensor(mixed_data).to(args.device), target_pos).float()
 
             data = data.unsqueeze(0)  # Batch size is 1
 
@@ -287,25 +248,23 @@ def run_separation(mixed_data, model, args, energy_cutoff, nms_cutoff):
 
 
 def main(args):
-    device = torch.device('cuda')
+    try:
+        device = torch.device('cuda')
 
-    args.device = device
-    model = Demucs(sources=2, n_audio_channels=args.n_channels)
-    model.load_state_dict(torch.load(args.model_checkpoint), strict=True)
-    model.train = False
-    model.to(device)
+        args.device = device
+        model = Demucs(sources=2, n_audio_channels=args.n_channels)
+        model.load_state_dict(torch.load(args.model_checkpoint), strict=True)
+        model.train = False
+        model.to(device)
 
-    all_dirs = sorted(list(Path(args.test_dir).glob('[0-9]*')))[2:3]
-    # all_dirs = [x for x in all_Dirs if check_valid_dir(x, 2)]
+        # all_dirs = [x for x in all_Dirs if check_valid_dir(x, 2)]
 
-    all_angle_errors = []
-    all_input_sdr = []
-    all_output_sdr = []
-    for curr_dir in all_dirs:
-        print("-------------")
+        all_angle_errors = []
+        all_input_sdr = []
+        all_output_sdr = []
 
         if args.debug:
-            writing_dir = os.path.join(os.getcwd(), str(curr_dir).split("/")[-1])
+            writing_dir = os.path.join(os.getcwd(), "real_vctk")
             print(writing_dir)
 
             if not os.path.exists(writing_dir):
@@ -313,7 +272,7 @@ def main(args):
 
             args.writing_dir = writing_dir
     
-        mixed_data, gt = get_items(curr_dir, args)
+        mixed_data = get_items(args)
 
         candidate_angles = run_separation(mixed_data, model, args, ENERGY_CUTOFF, NMS_SIMILARITY_CUTOFF)
 
@@ -353,8 +312,11 @@ def main(args):
         print(all_angle_errors)
 
 
-    import pdb
-    pdb.set_trace()
+    except Exception as e:
+        print(e)
+        print("\n")
+        import pdb
+        pdb.set_trace()
 
     
 if __name__ == '__main__':

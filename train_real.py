@@ -11,14 +11,15 @@ import torch.optim as optim
 import torch.nn.functional as F
 # import torch.utils.tensorboard as tensorboard
 
+torch.manual_seed(123)
+np.random.seed(123)
+
 import soundfile as sf
 
 from data import SpatialAudioDatasetWaveform, RealDataset
 from network import Demucs, center_trim, left_trim, load_pretrain # pylint: disable=unused-import
 
-SAMPLING_RATE = 32000
 USE_CUDA = True
-np.random.seed(1234567)
 
 def train_epoch(model: nn.Module,
                 device: torch.device,
@@ -40,14 +41,18 @@ def train_epoch(model: nn.Module,
     voice_losses = []
     bg_losses = []
     combined_losses = []
-    for batch_idx, (data, label_voice_signals) in enumerate(train_loader):
+
+    for batch_idx, (data, label_voice_signals, angle_idx) in enumerate(train_loader):
         data = data.to(device)
         label_voice_signals = label_voice_signals.to(device)
+        angle_idx = angle_idx.to(device)
 
-        # Normalize input
+        # Normalize input, each batch item separately
         data = (data * 2**15).round() / 2**15
-        ref = data.mean(0)
-        data = (data - ref.mean()) / ref.std()
+        ref = data.mean(1)  # Average across the n microphones
+        means = ref.mean(1).unsqueeze(1).unsqueeze(2)
+        stds = ref.std(1).unsqueeze(1).unsqueeze(2)
+        data = (data - means) / stds
 
         # Reset grad
         optimizer.zero_grad()
@@ -60,12 +65,11 @@ def train_epoch(model: nn.Module,
         delta = valid_length - data.shape[-1]
         padded = F.pad(data, (delta // 2, delta - delta // 2))
 
-        output_signal, output_locs = model(padded)
+        output_signal = model(padded, angle_idx)
         output_signal = center_trim(output_signal, data)
-        output_locs = center_trim(output_locs, data)
 
         # Un-normalize
-        output_signal = output_signal * ref.std() + ref.mean()
+        output_signal = output_signal * stds.unsqueeze(3) + means.unsqueeze(3)
         output_voices = output_signal[:, 0:1]
 
         if data_parallel:
@@ -86,7 +90,7 @@ def train_epoch(model: nn.Module,
         optimizer.step()
 
         if batch_idx % log_interval == 0:
-            # sf.write("output{}.wav".format(epoch), output_voices[0, 0].detach().cpu().numpy(), SAMPLING_RATE)
+            #sf.write("output{}.wav".format(epoch), output_voices[0, 0].detach().cpu().numpy(), SAMPLING_RATE)
             print("Loss {}".format(loss))
             print("Train Epoch: {} [{}/{} ({:.0f}%)] \t Loss: {:.6f}".format(
                 epoch, batch_idx * len(data), len(train_loader.dataset),
@@ -124,14 +128,17 @@ def test_epoch(model: nn.Module,
     bg_losses = []
     combined_losses = []
     with torch.no_grad():
-        for batch_idx, (data, label_voice_signals) in enumerate(test_loader):
+        for batch_idx, (data, label_voice_signals, angle_idx) in enumerate(test_loader):
             data = data.to(device)
             label_voice_signals = label_voice_signals.to(device)
+            angle_idx = angle_idx.to(device)
 
-            # Normalize input
-            transformed_data = (data * 2**15).round() / 2**15
-            ref = transformed_data.mean(0)
-            transformed_data = (transformed_data - ref.mean()) / ref.std()
+            # Normalize input, each batch item separately
+            data = (data * 2**15).round() / 2**15
+            ref = data.mean(1)  # Average across the n microphones
+            means = ref.mean(1).unsqueeze(1).unsqueeze(2)
+            stds = ref.std(1).unsqueeze(1).unsqueeze(2)
+            transformed_data = (data - means) / stds
 
             # Run through the model
             if data_parallel:
@@ -141,39 +148,39 @@ def test_epoch(model: nn.Module,
             delta = valid_length - transformed_data.shape[-1]
             padded = F.pad(transformed_data, (delta // 2, delta - delta // 2))
 
-            output_signal, output_locs = model(padded)
+            output_signal= model(padded, angle_idx)
             output_signal = center_trim(output_signal, transformed_data)
-            output_locs = center_trim(output_locs, transformed_data)
 
             # Un-normalize
-            output_signal = output_signal * ref.std() + ref.mean()
+            output_signal = output_signal * stds.unsqueeze(3) + means.unsqueeze(3)
             output_voices = output_signal[:, 0:1]
 
             if data_parallel:
                 loss, info = model.module.voice_loss(output_voices, label_voice_signals)
             else:
                 loss, info = model.voice_loss(output_voices, label_voice_signals)
+            
 
-            test_loss += loss
+            test_loss += loss.item()
             voice_losses.append(info['reconstruction_voices_loss'].item())
 
             if batch_idx % log_interval == 0:
                 print("Loss: {}".format(loss))
-                if writer:
-                    for data_id in range(min(2, data.size(0))): # Output only maximum 2 audios
-                        for mic_id in range(data.size(1)):
-                            writer.add_audio("{}_input_{}".format(data_id, mic_id), data[data_id, mic_id, :], epoch, sample_rate=SAMPLING_RATE)
-                            writer.add_audio("{}_gt_{}".format(data_id, mic_id), label_voice_signals[data_id, 0, mic_id, :], epoch, sample_rate=SAMPLING_RATE)
-                            writer.add_audio("{}_pred_{}".format(data_id, mic_id), output_voices[data_id, 0, mic_id, :], epoch, sample_rate=SAMPLING_RATE)
+                # if writer:
+                #     for data_id in range(min(2, data.size(0))): # Output only maximum 2 audios
+                #         for mic_id in range(data.size(1)):
+                #             writer.add_audio("{}_input_{}".format(data_id, mic_id), data[data_id, mic_id, :], epoch, sample_rate=args.sr)
+                #             writer.add_audio("{}_gt_{}".format(data_id, mic_id), label_voice_signals[data_id, 0, mic_id, :], epoch, sample_rate=args.sr)
+                #             writer.add_audio("{}_pred_{}".format(data_id, mic_id), output_voices[data_id, 0, mic_id, :], epoch, sample_rate=args.sr)
 
         test_loss /= len(test_loader)
         print("\nTest set: Average Loss: {:.4f}\n".format(test_loss))
 
         # Write loss to the Tensorboard
-        if writer:
-            writer.add_scalar('Loss/test', test_loss, epoch)
-            writer.add_scalar('Loss_voice/test', np.mean(voice_losses), epoch)
-            writer.flush()
+        # if writer:
+        #     writer.add_scalar('Loss/test', test_loss, epoch)
+        #     writer.add_scalar('Loss_voice/test', np.mean(voice_losses), epoch)
+        #     writer.flush()
 
         return test_loss
 
@@ -182,9 +189,18 @@ def train(args: argparse.Namespace):
     Train the network.
     """
     # Load dataset
-    data_train = RealDataset(args.train_dir, sr=args.sr, num_elements=10000, perturb_prob=1.0)
-    data_test = RealDataset(args.test_dir, sr=args.sr, num_elements=400)
     device = torch.device('cuda:0')
+    data_train = RealDataset(args.train_dir,
+                             sr=args.sr, 
+                             num_elements=10000,
+                             perturb_prob=0.5,
+                             short_data=True)
+
+    data_test = RealDataset(args.test_dir,
+                             sr=args.sr, 
+                             num_elements=400,
+                             perturb_prob=0.0,
+                             short_data=True)
 
     # Set up the device and workers.
     use_cuda = args.use_cuda and torch.cuda.is_available()
@@ -224,17 +240,14 @@ def train(args: argparse.Namespace):
 
     # Load pretrain
     if args.pretrain:
-        #model.load_state_dict(torch.load('checkpoints/pyroom_reverb_32000_real_test_better_augmentation/pyroom_reverb_32000_real_test_better_augmentation_37.pt'))
-        model.load_state_dict(torch.load('checkpoints/pyroom_synthetic_3voices_22050/pyroom_synthetic_3voices_22050_22.pt'))
-        # pretrain_state_dict = torch.load("checkpoints/pyroom_reverb_32000_real_test_1.pt")
-        # load_pretrain(model, pretrain_state_dict)
-        # checkpoint_path = Path(args.checkpoints_dir) / "shifted_input_nchannels_167.pt"
-        # state_dict = torch.load(checkpoint_path)
-        # if isinstance(model, torch.nn.DataParallel):
-        #     model.module.load_state_dict(state_dict)
-        # else:
-        #     model.load_state_dict(state_dict)
-
+        # state_dict = torch.load('checkpoints/librispeech_6mics/librispeech_6mics_3.pt')
+        state_dict = torch.load('checkpoints/librispeech_2mics/librispeech_2mics_2.pt')
+        load_pretrain(model, state_dict)
+       
+        #model.load_state_dict(torch.load('checkpoints/librispeech_6mics/librispeech_6mics_3.pt'), strict=False)
+        
+        #model.load_state_dict(torch.load("checkpoints/shifted_input_nchannels/shifted_input_nchannels_167.pt"))
+        #model.load_state_dict(torch.load('checkpoints/22degrees_6mics/22degrees_6mics_39.pt'), strict=False)
     # Load the model if `args.start_epoch` is greater than 0. This will load the model from
     # epoch = `args.start_epoch - 1`
     if args.start_epoch is not None:
@@ -271,14 +284,17 @@ def train(args: argparse.Namespace):
     # Training loop
     try:
         for epoch in range(start_epoch, args.epochs + 1):
+            #test_loss = test_epoch(model, device, test_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
             train_loss = train_epoch(model, device, optimizer, train_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
-            test_loss = test_epoch(model, device, test_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
-            train_losses.append((epoch, train_loss))
-            test_losses.append((epoch, test_loss))
             if args.multiple_GPUs:
                 torch.save(model.module.state_dict(), os.path.join(args.checkpoints_dir, args.name, "{}_{}.pt".format(save_prefix, epoch)))
             else:
                 torch.save(model.state_dict(), os.path.join(args.checkpoints_dir, args.name, "{}_{}.pt".format(save_prefix, epoch)))
+            print("Done with training, going to testing")
+            test_loss = test_epoch(model, device, test_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
+            train_losses.append((epoch, train_loss))
+            test_losses.append((epoch, test_loss))
+
     except KeyboardInterrupt:
         print("Interrupted")
     except Exception as _: # pylint: disable=broad-except
@@ -309,6 +325,7 @@ if __name__ == '__main__':
     parser.add_argument('--tensorboard', dest='tensorboard', action='store_true', help="Whether to use tensorboard")
     parser.add_argument('--multiple_GPUs', dest='multiple_GPUs', action='store_true', help="Whether to use multiple GPUs")
     parser.add_argument('--device_ids', default=[], nargs='+', help="IDs for multiple GPUs")
+    parser.add_argument('--angle_idx', default=0, type=int, help="See data.py for details")
     print(parser.parse_args())
     train(parser.parse_args())
 

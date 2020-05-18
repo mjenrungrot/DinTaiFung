@@ -117,10 +117,8 @@ class Demucs(nn.Module):
             encode["conv2"] = nn.Conv1d(channels, 2 * channels, 1)
             encode["activation"] = activation
 
-            #encode["gc_embed"] = nn.Conv1d(5, channels, 1)
-            #encode["gc_embed2"] = nn.Conv1d(5, 2 * channels, 1)
-            encode["gc_embed"] = nn.Linear(5, channels)
-            #encode["gc_embed2"] = nn.Linear(5, 2 * channels)
+            encode["gc_embed1"] = nn.Conv1d(5, channels, 1)
+            encode["gc_embed2"] = nn.Conv1d(5, 2 * channels, 1)
 
             self.encoder.append(encode)
 
@@ -141,12 +139,11 @@ class Demucs(nn.Module):
             #     decode += [nn.ConvTranspose1d(channels, out_channels, kernel_size, stride)]
             decode["conv1"] = nn.Conv1d(channels, 2 * channels, context)
             decode["activation"] = activation
-            decode["convtransposed"] = nn.ConvTranspose1d(channels, out_channels, kernel_size, stride)
+            decode["conv2"] = nn.ConvTranspose1d(channels, out_channels, kernel_size, stride)
 
-            # decode["gc_embed"] = nn.Conv1d(5, 2 * channels, 1)
-            # decode["gc_embed2"] = nn.Conv1d(5, out_channels, 1)
-            decode["gc_embed"] = nn.Linear(5, 2 * channels)
-            decode["gc_embed2"] = nn.Linear(5, out_channels)
+            decode["gc_embed1"] = nn.Conv1d(5, 2 * channels, 1)
+            decode["gc_embed2"] = nn.Conv1d(5, out_channels, 1)
+
 
             if index > 0:
                 decode["relu"] = nn.ReLU()
@@ -181,11 +178,13 @@ class Demucs(nn.Module):
         # Encoder
         for encode in self.encoder:
             x = encode["conv1"](x)  # Conv 1d
-            embedding = encode["gc_embed"](angle_conditioning).unsqueeze(2)
+            embedding = encode["gc_embed1"](angle_conditioning.unsqueeze(2))
+
             x = encode["relu"](x + embedding)
             x = encode["conv2"](x)
-            #embedding2 = encode["gc_embed2"](angle_conditioning).unsqueeze(2)
-            x = encode["activation"](x)
+
+            embedding2 = encode["gc_embed2"](angle_conditioning.unsqueeze(2))
+            x = encode["activation"](x + embedding2)
 
 
             saved.append(x)
@@ -207,21 +206,21 @@ class Demucs(nn.Module):
             skip = center_trim(saved.pop(-1), x)
             x = x + skip
 
-            # x = decode["conv1"](x)
-            # embedding = decode["gc_embed"](angle_conditioning).unsqueeze(2)
-            # x = decode["activation"](x + embedding)
-            # x = decode["convtransposed"](x)
-            # embedding2 = decode["gc_embed2"](angle_conditioning).unsqueeze(2)
-            # if "relu" in decode:
-            #     x = decode["relu"](x + embedding2)
-
             x = decode["conv1"](x)
-            #embedding = decode["gc_embed"](angle_conditioning).unsqueeze(2)
-            x = decode["activation"](x)
-            x = decode["convtransposed"](x)
-            #embedding2 = decode["gc_embed2"](angle_conditioning).unsqueeze(2)
+            embedding = decode["gc_embed1"](angle_conditioning.unsqueeze(2))
+            x = decode["activation"](x + embedding)
+            x = decode["conv2"](x)
+            embedding2 = decode["gc_embed2"](angle_conditioning.unsqueeze(2))
             if "relu" in decode:
-                x = decode["relu"](x)
+                x = decode["relu"](x + embedding2)
+
+            # x = decode["conv1"](x)
+            # #embedding = decode["gc_embed"](angle_conditioning).unsqueeze(2)
+            # x = decode["activation"](x)
+            # x = decode["convtransposed"](x)
+            # #embedding2 = decode["gc_embed2"](angle_conditioning).unsqueeze(2)
+            # if "relu" in decode:
+            #     x = decode["relu"](x)
 
 
         if self.final:
@@ -332,84 +331,44 @@ class Demucs(nn.Module):
 
         return int(length)
 
+# def load_pretrain(model, state_dict): # pylint: disable=redefined-outer-name
+#     """
+#     This code load the Demucs model's weight with the actual weight available online.
+#     Used only for pre-training. The code here is generated.
+#     """
+#     loaded_keys = {}
+#     for i in range(6):
+#         for process in ["encoder", "decoder"]:
+#             loaded_keys["{}.{}.conv1.bias".format(process, i)] = "{}.{}.0.bias".format(process, i)
+#             loaded_keys["{}.{}.conv1.weight".format(process, i)] = "{}.{}.0.weight".format(process, i)
+#             loaded_keys["{}.{}.conv2.bias".format(process, i)] = "{}.{}.2.bias".format(process, i)
+#             loaded_keys["{}.{}.conv2.weight".format(process, i)] = "{}.{}.2.weight".format(process, i)
+
+
+
+#     for key in ['lstm.weight_ih_l0', 'lstm.weight_hh_l0', 'lstm.bias_ih_l0', 'lstm.bias_hh_l0',
+#                 'lstm.weight_ih_l0_reverse', 'lstm.weight_hh_l0_reverse', 'lstm.bias_ih_l0_reverse',
+#                 'lstm.bias_hh_l0_reverse', 'lstm.weight_ih_l1', 'lstm.weight_hh_l1', 'lstm.bias_ih_l1',
+#                 'lstm.bias_hh_l1', 'lstm.weight_ih_l1_reverse', 'lstm.weight_hh_l1_reverse', 'lstm.bias_ih_l1_reverse',
+#                 'lstm.bias_hh_l1_reverse', 'lstm_linear.weight', 'lstm_linear.bias']:
+#         loaded_keys[key] = key
+
+#     for key in loaded_keys:
+#         try:
+#             _ = model.load_state_dict({key: state_dict[loaded_keys[key]]}, strict=False)
+#             print("Load {} (shape = {}) from the pretrained model".format(key, state_dict[loaded_keys[key]].shape))
+#         except:
+#             print("Failed to load {}".format(key))
+#             pass
+
 def load_pretrain(model, state_dict): # pylint: disable=redefined-outer-name
-    """
-    This code load the Demucs model's weight with the actual weight available online.
-    Used only for pre-training. The code here is generated.
-    """
-    loaded_keys = {}
-    loaded_keys['decoder.0.0.bias'  ] = 'decoder.0.0.bias'   # torch.Size([4096])
-    loaded_keys['decoder.0.0.weight'] = 'decoder.0.0.weight' # torch.Size([4096, 2048, 3])
-    loaded_keys['decoder.0.2.bias'  ] = 'decoder.0.2.bias'   # torch.Size([1024])
-    loaded_keys['decoder.0.2.weight'] = 'decoder.0.2.weight' # torch.Size([2048, 1024, 8])
-    loaded_keys['decoder.1.0.bias'  ] = 'decoder.1.0.bias'   # torch.Size([2048])
-    loaded_keys['decoder.1.0.weight'] = 'decoder.1.0.weight' # torch.Size([2048, 1024, 3])
-    loaded_keys['decoder.1.2.bias'  ] = 'decoder.1.2.bias'   # torch.Size([512])
-    loaded_keys['decoder.1.2.weight'] = 'decoder.1.2.weight' # torch.Size([1024, 512, 8])
-    loaded_keys['decoder.2.0.bias'  ] = 'decoder.2.0.bias'   # torch.Size([1024])
-    loaded_keys['decoder.2.0.weight'] = 'decoder.2.0.weight' # torch.Size([1024, 512, 3])
-    loaded_keys['decoder.2.2.bias'  ] = 'decoder.2.2.bias'   # torch.Size([256])
-    loaded_keys['decoder.2.2.weight'] = 'decoder.2.2.weight' # torch.Size([512, 256, 8])
-    loaded_keys['decoder.3.0.bias'  ] = 'decoder.3.0.bias'   # torch.Size([512])
-    loaded_keys['decoder.3.0.weight'] = 'decoder.3.0.weight' # torch.Size([512, 256, 3])
-    loaded_keys['decoder.3.2.bias'  ] = 'decoder.3.2.bias'   # torch.Size([128])
-    loaded_keys['decoder.3.2.weight'] = 'decoder.3.2.weight' # torch.Size([256, 128, 8])
-    loaded_keys['decoder.4.0.bias'  ] = 'decoder.4.0.bias'   # torch.Size([256])
-    loaded_keys['decoder.4.0.weight'] = 'decoder.4.0.weight' # torch.Size([256, 128, 3])
-    loaded_keys['decoder.4.2.bias'  ] = 'decoder.4.2.bias'   # torch.Size([64])
-    loaded_keys['decoder.4.2.weight'] = 'decoder.4.2.weight' # torch.Size([128, 64, 8])
-    loaded_keys['decoder.5.0.bias'  ] = 'decoder.5.0.bias'   # torch.Size([128])
-    loaded_keys['decoder.5.0.weight'] = 'decoder.5.0.weight' # torch.Size([128, 64, 3])
-    # loaded_keys['decoder.5.2.bias'  ] = 'decoder.5.2.bias'   # torch.Size([8])          # Output layer
-    # loaded_keys['decoder.5.2.weight'] = 'decoder.5.2.weight' # torch.Size([64, 8, 8])   # Output layer
-    # loaded_keys['encoder.0.0.bias'  ] = 'encoder.0.0.bias'   # torch.Size([64])         # Input layer
-    # loaded_keys['encoder.0.0.weight'] = 'encoder.0.0.weight' # torch.Size([64, 2, 8])   # Input layer
-    loaded_keys['encoder.0.2.bias'  ] = 'encoder.0.2.bias'   # torch.Size([128])
-    loaded_keys['encoder.0.2.weight'] = 'encoder.0.2.weight' # torch.Size([128, 64, 1])
-    loaded_keys['encoder.1.0.bias'  ] = 'encoder.1.0.bias'   # torch.Size([128])
-    loaded_keys['encoder.1.0.weight'] = 'encoder.1.0.weight' # torch.Size([128, 64, 8])
-    loaded_keys['encoder.1.2.bias'  ] = 'encoder.1.2.bias'   # torch.Size([256])
-    loaded_keys['encoder.1.2.weight'] = 'encoder.1.2.weight' # torch.Size([256, 128, 1])
-    loaded_keys['encoder.2.0.bias'  ] = 'encoder.2.0.bias'   # torch.Size([256])
-    loaded_keys['encoder.2.0.weight'] = 'encoder.2.0.weight' # torch.Size([256, 128, 8])
-    loaded_keys['encoder.2.2.bias'  ] = 'encoder.2.2.bias'   # torch.Size([512])
-    loaded_keys['encoder.2.2.weight'] = 'encoder.2.2.weight' # torch.Size([512, 256, 1])
-    loaded_keys['encoder.3.0.bias'  ] = 'encoder.3.0.bias'   # torch.Size([512])
-    loaded_keys['encoder.3.0.weight'] = 'encoder.3.0.weight' # torch.Size([512, 256, 8])
-    loaded_keys['encoder.3.2.bias'  ] = 'encoder.3.2.bias'   # torch.Size([1024])
-    loaded_keys['encoder.3.2.weight'] = 'encoder.3.2.weight' # torch.Size([1024, 512, 1])
-    loaded_keys['encoder.4.0.bias'  ] = 'encoder.4.0.bias'   # torch.Size([1024])
-    loaded_keys['encoder.4.0.weight'] = 'encoder.4.0.weight' # torch.Size([1024, 512, 8])
-    loaded_keys['encoder.4.2.bias'  ] = 'encoder.4.2.bias'   # torch.Size([2048])
-    loaded_keys['encoder.4.2.weight'] = 'encoder.4.2.weight' # torch.Size([2048, 1024, 1])
-    loaded_keys['encoder.5.0.bias'  ] = 'encoder.5.0.bias'   # torch.Size([2048])
-    loaded_keys['encoder.5.0.weight'] = 'encoder.5.0.weight' # torch.Size([2048, 1024, 8])
-    loaded_keys['encoder.5.2.bias'  ] = 'encoder.5.2.bias'   # torch.Size([4096])
-    loaded_keys['encoder.5.2.weight'] = 'encoder.5.2.weight' # torch.Size([4096, 2048, 1])
-    loaded_keys['lstm_linear.bias'                ] = 'lstm.linear.bias'                 # torch.Size([2048])
-    loaded_keys['lstm_linear.weight'              ] = 'lstm.linear.weight'               # torch.Size([2048, 4096])
-    loaded_keys['lstm.bias_hh_l0'                 ] = 'lstm.lstm.bias_hh_l0'             # torch.Size([8192])
-    loaded_keys['lstm.bias_hh_l0_reverse'         ] = 'lstm.lstm.bias_hh_l0_reverse'     # torch.Size([8192])
-    loaded_keys['lstm.bias_hh_l1'                 ] = 'lstm.lstm.bias_hh_l1'             # torch.Size([8192])
-    loaded_keys['lstm.bias_hh_l1_reverse'         ] = 'lstm.lstm.bias_hh_l1_reverse'     # torch.Size([8192])
-    loaded_keys['lstm.bias_ih_l0'                 ] = 'lstm.lstm.bias_ih_l0'             # torch.Size([8192])
-    loaded_keys['lstm.bias_ih_l0_reverse'         ] = 'lstm.lstm.bias_ih_l0_reverse'     # torch.Size([8192])
-    loaded_keys['lstm.bias_ih_l1'                 ] = 'lstm.lstm.bias_ih_l1'             # torch.Size([8192])
-    loaded_keys['lstm.bias_ih_l1_reverse'         ] = 'lstm.lstm.bias_ih_l1_reverse'     # torch.Size([8192])
-    loaded_keys['lstm.weight_hh_l0'               ] = 'lstm.lstm.weight_hh_l0'           # torch.Size([8192, 2048])
-    loaded_keys['lstm.weight_hh_l0_reverse'       ] = 'lstm.lstm.weight_hh_l0_reverse'   # torch.Size([8192, 2048])
-    loaded_keys['lstm.weight_hh_l1'               ] = 'lstm.lstm.weight_hh_l1'           # torch.Size([8192, 2048])
-    loaded_keys['lstm.weight_hh_l1_reverse'       ] = 'lstm.lstm.weight_hh_l1_reverse'   # torch.Size([8192, 2048])
-    loaded_keys['lstm.weight_ih_l0'               ] = 'lstm.lstm.weight_ih_l0'           # torch.Size([8192, 2048])
-    loaded_keys['lstm.weight_ih_l0_reverse'       ] = 'lstm.lstm.weight_ih_l0_reverse'   # torch.Size([8192, 2048])
-    loaded_keys['lstm.weight_ih_l1'               ] = 'lstm.lstm.weight_ih_l1'           # torch.Size([8192, 4096])
-    loaded_keys['lstm.weight_ih_l1_reverse'       ] = 'lstm.lstm.weight_ih_l1_reverse'   # torch.Size([8192, 4096])
-    for key in loaded_keys:
+    for key in state_dict.keys():
         try:
-            _ = model.load_state_dict({key: state_dict[loaded_keys[key]]}, strict=False)
-            print("Load {} (shape = {}) from the pretrained model".format(key, state_dict[loaded_keys[key]].shape))
-        except:
+            _ = model.load_state_dict({key: state_dict[key]}, strict=False)
+            print("Load {} (shape = {}) from the pretrained model".format(key, state_dict[key].shape))
+        except Exception as e:
             print("Failed to load {}".format(key))
+            print(e)
             pass
 
 if __name__ == '__main__':

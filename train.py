@@ -11,6 +11,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 # import torch.utils.tensorboard as tensorboard
 
+torch.manual_seed(123)
+np.random.seed(123)
+
 import soundfile as sf
 
 from data import SpatialAudioDatasetWaveform, RealDataset
@@ -42,6 +45,7 @@ def train_epoch(model: nn.Module,
     for batch_idx, (data, label_voice_signals, _, _, angle_idx) in enumerate(train_loader):
         data = data.to(device)
         label_voice_signals = label_voice_signals.to(device)
+        angle_idx = angle_idx.to(device)
 
         # Normalize input, each batch item separately
         data = (data * 2**15).round() / 2**15
@@ -61,9 +65,8 @@ def train_epoch(model: nn.Module,
         delta = valid_length - data.shape[-1]
         padded = F.pad(data, (delta // 2, delta - delta // 2))
 
-        output_signal = model(padded)
+        output_signal = model(padded, angle_idx)
         output_signal = center_trim(output_signal, data)
-
 
         # Un-normalize
         output_signal = output_signal * stds.unsqueeze(3) + means.unsqueeze(3)
@@ -125,9 +128,10 @@ def test_epoch(model: nn.Module,
     bg_losses = []
     combined_losses = []
     with torch.no_grad():
-        for batch_idx, (data, label_voice_signals, _, _) in enumerate(test_loader):
+        for batch_idx, (data, label_voice_signals, _, _, angle_idx) in enumerate(test_loader):
             data = data.to(device)
             label_voice_signals = label_voice_signals.to(device)
+            angle_idx = angle_idx.to(device)
 
             # Normalize input, each batch item separately
             data = (data * 2**15).round() / 2**15
@@ -144,7 +148,7 @@ def test_epoch(model: nn.Module,
             delta = valid_length - transformed_data.shape[-1]
             padded = F.pad(transformed_data, (delta // 2, delta - delta // 2))
 
-            output_signal= model(padded)
+            output_signal= model(padded, angle_idx)
             output_signal = center_trim(output_signal, transformed_data)
 
             # Un-normalize
@@ -157,7 +161,7 @@ def test_epoch(model: nn.Module,
                 loss, info = model.voice_loss(output_voices, label_voice_signals)
             
 
-            test_loss += loss
+            test_loss += loss.item()
             voice_losses.append(info['reconstruction_voices_loss'].item())
 
             if batch_idx % log_interval == 0:
@@ -186,12 +190,18 @@ def train(args: argparse.Namespace):
     """
     # Load dataset
     device = torch.device('cuda:0')
-    data_train = SpatialAudioDatasetWaveform(args.train_dir, n_sources=1, n_backgrounds=1,
-                                             sr=args.sr, target_fg_std=None, target_bg_std=None, perturb_prob=1.0,
-                                             angular_specificity_idx=args.angle_idx)
-    data_test = SpatialAudioDatasetWaveform(args.test_dir, n_sources=1, n_backgrounds=1,
+    data_train = SpatialAudioDatasetWaveform(args.train_dir,
+                                             n_mics=args.n_channels,
+                                             n_sources=1, n_backgrounds=1,
+                                             sr=args.sr, target_fg_std=None, target_bg_std=None, perturb_prob=0.2,
+                                             angular_specificity_idx=args.angle_idx,
+                                             requires_n_voices=1)
+    data_test = SpatialAudioDatasetWaveform(args.test_dir,
+                                            n_mics=args.n_channels,
+                                            n_sources=1, n_backgrounds=1,
                                             sr=args.sr, target_fg_std=None, target_bg_std=None,
-                                            angular_specificity_idx=args.angle_idx)
+                                            angular_specificity_idx=args.angle_idx,
+                                            requires_n_voices=1)
 
     # Set up the device and workers.
     use_cuda = args.use_cuda and torch.cuda.is_available()
@@ -231,9 +241,14 @@ def train(args: argparse.Namespace):
 
     # Load pretrain
     if args.pretrain:
-        #model.load_state_dict(torch.load("checkpoints/2_mics_varying_voice_angle/2_mics_varying_voice_angle_200.pt"))
+        # state_dict = torch.load('checkpoints/librispeech_6mics/librispeech_6mics_3.pt')
+        state_dict = torch.load('checkpoints/librispeech_2mics/librispeech_2mics_2.pt')
+        load_pretrain(model, state_dict)
+       
+        #model.load_state_dict(torch.load('checkpoints/librispeech_6mics/librispeech_6mics_3.pt'), strict=False)
+        
         #model.load_state_dict(torch.load("checkpoints/shifted_input_nchannels/shifted_input_nchannels_167.pt"))
-        model.load_state_dict(torch.load('checkpoints/22degrees_6mics/22degrees_6mics_39.pt'), strict=False)
+        #model.load_state_dict(torch.load('checkpoints/22degrees_6mics/22degrees_6mics_39.pt'), strict=False)
     # Load the model if `args.start_epoch` is greater than 0. This will load the model from
     # epoch = `args.start_epoch - 1`
     if args.start_epoch is not None:
@@ -270,15 +285,17 @@ def train(args: argparse.Namespace):
     # Training loop
     try:
         for epoch in range(start_epoch, args.epochs + 1):
-            #test_loss = test_epoch(model, device, test_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
-            train_loss = train_epoch(model, device, optimizer, train_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
             test_loss = test_epoch(model, device, test_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
-            train_losses.append((epoch, train_loss))
-            test_losses.append((epoch, test_loss))
+            train_loss = train_epoch(model, device, optimizer, train_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
             if args.multiple_GPUs:
                 torch.save(model.module.state_dict(), os.path.join(args.checkpoints_dir, args.name, "{}_{}.pt".format(save_prefix, epoch)))
             else:
                 torch.save(model.state_dict(), os.path.join(args.checkpoints_dir, args.name, "{}_{}.pt".format(save_prefix, epoch)))
+            print("Done with training, going to testing")
+            #test_loss = test_epoch(model, device, test_loader, epoch, args.print_interval, data_parallel=data_parallel, writer=writer)
+            train_losses.append((epoch, train_loss))
+            test_losses.append((epoch, test_loss))
+
     except KeyboardInterrupt:
         print("Interrupted")
     except Exception as _: # pylint: disable=broad-except
