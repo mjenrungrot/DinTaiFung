@@ -46,8 +46,10 @@ def train_epoch(model: nn.Module,
 
         # Normalize input
         data = (data * 2**15).round() / 2**15
-        ref = data.mean(0)
-        data = (data - ref.mean()) / ref.std()
+        ref = data.mean(1)  # Average across the n microphones
+        means = ref.mean(1).unsqueeze(1).unsqueeze(2)
+        stds = ref.std(1).unsqueeze(1).unsqueeze(2)
+        data = (data - means) / stds
 
         # Reset grad
         optimizer.zero_grad()
@@ -65,7 +67,7 @@ def train_epoch(model: nn.Module,
         output_locs = center_trim(output_locs, data)
 
         # Un-normalize
-        output_signal = output_signal * ref.std() + ref.mean()
+        output_signal = output_signal * stds.unsqueeze(3) + means.unsqueeze(3)
         output_voices = output_signal[:, 0:1]
 
         if data_parallel:
@@ -129,9 +131,11 @@ def test_epoch(model: nn.Module,
             label_voice_signals = label_voice_signals.to(device)
 
             # Normalize input
-            transformed_data = (data * 2**15).round() / 2**15
-            ref = transformed_data.mean(0)
-            transformed_data = (transformed_data - ref.mean()) / ref.std()
+            data = (data * 2**15).round() / 2**15
+            ref = data.mean(1)  # Average across the n microphones
+            means = ref.mean(1).unsqueeze(1).unsqueeze(2)
+            stds = ref.std(1).unsqueeze(1).unsqueeze(2)
+            transformed_data = (data - means) / stds
 
             # Run through the model
             if data_parallel:
@@ -146,7 +150,7 @@ def test_epoch(model: nn.Module,
             output_locs = center_trim(output_locs, transformed_data)
 
             # Un-normalize
-            output_signal = output_signal * ref.std() + ref.mean()
+            output_signal = output_signal * stds.unsqueeze(3) + means.unsqueeze(3)
             output_voices = output_signal[:, 0:1]
 
             if data_parallel:
@@ -154,7 +158,7 @@ def test_epoch(model: nn.Module,
             else:
                 loss, info = model.voice_loss(output_voices, label_voice_signals)
 
-            test_loss += loss
+            test_loss += loss.item()
             voice_losses.append(info['reconstruction_voices_loss'].item())
 
             if batch_idx % log_interval == 0:
@@ -182,8 +186,8 @@ def train(args: argparse.Namespace):
     Train the network.
     """
     # Load dataset
-    data_train = RealDataset(args.train_dir, sr=args.sr, num_elements=10000, perturb_prob=1.0)
-    data_test = RealDataset(args.test_dir, sr=args.sr, num_elements=400)
+    data_train = RealDataset(args.train_dir, sr=args.sr, num_elements=10000, perturb_prob=1.0, short_data=False)
+    data_test = RealDataset(args.test_dir, sr=args.sr, num_elements=400, short_data=False)
     device = torch.device('cuda:0')
 
     # Set up the device and workers.

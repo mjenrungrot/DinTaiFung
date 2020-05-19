@@ -215,7 +215,7 @@ class Demucs(nn.Module):
         locs = locs.view(locs.size(0), self.sources, 3, locs.size(-1))
         # locs = locs.view(locs.size(0), 2 * self.location_shifts+1, locs.size(-1))
         # locs = locs[:, :, 0]
-        return x, locs
+        return x
 
     def loss(self,
              input_signal: torch.Tensor,
